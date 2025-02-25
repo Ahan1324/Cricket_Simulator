@@ -1,0 +1,9 @@
+id,ground_name,place,capacity,quality,pace,turn,bounce,hardness,grass_cover
+1,GaddafiStadium,Lahore,27000,4,7,5,7,8,6,2
+2,NationalStadium,Karachi,34000,3,,6,6,6,7,7
+3,RawalpindiCricketStadium,D,15000,2,6,7,6,7,
+4,MultanCricketStadium,D,25000,4,7,6,7,8,5
+5,PeshawarZalmiCricketStadium,F,20000,1,6,6,6,7,6
+6,Karachi,K,20000,1,6,9,6,7,6
+4,Dubai,W,25000,4,7,6,7,8,5
+10,PremadasaStadium,Colombo,3500000,1,5,7,4,2,5
