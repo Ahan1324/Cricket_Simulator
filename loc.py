@@ -990,7 +990,8 @@ def play_match(team1name: str, team2name: str, venuename: str, format: str):
     # TODO: Implement the match simulation logic
     print(team1.players)
     print(team2.players)
-    assert len(team1.players) == 11 and len(team2.players) == 11
+    assert len(team1.players) == 11
+    assert len(team2.players) == 11
     if format.upper() == "ODI": 
         simulate_odi(team1, team2, ground)
     if format.lower() == "test":
@@ -1037,6 +1038,7 @@ def calculate_aggression_t20(over, pitch, target, striker, non_striker, settled_
     else:
         rpo_needed = base_rpo + 1
     # Step 8: Apply pitch factor
+
     target_rpo = (rpo_needed * base_rpo) ** 0.5
 
     # Step 9: Ensure RPO is between 4 and 12
@@ -1045,7 +1047,7 @@ def calculate_aggression_t20(over, pitch, target, striker, non_striker, settled_
     return base_rpo/9
 
 
-def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_striker, settled_non_striker):
+def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_striker, settled_non_striker,wickets_in_hand):
     """
     Determines the appropriate aggression level (target RPO) for an ODI innings continuously.
 
@@ -1067,8 +1069,10 @@ def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_
         base_rpo += 2 * math.log(over + 1, 2.7)  # Powerplay: aggressive start
     elif over < 35:
         base_rpo += 1 * 2.7 ** ((over - 10) / 25)  # Middle overs: steady increase
-    else:
-        base_rpo += 1.5 * (over - 35) / 100 + 2.7 ** ((over - 35) / 8)  # Death overs: sharp rise
+    elif over < 45:
+        base_rpo += 2 * (over - 35) / 100 + 2.7 ** ((over - 35) / 8)  # Death overs: sharp rise
+    else: 
+        base_rpo = + over - 30
 
 
     # Step 3: Target chasing adjustment
@@ -1076,20 +1080,23 @@ def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_
         rpo_needed = target / (50 - over)
         target_factor = 1 + (1 / (1 + math.exp(-0.5 * (rpo_needed - base_rpo)))) - 0.5
         base_rpo *= target_factor
-    else:
-        rpo_needed = base_rpo + 1
+
+    if over < 40: 
+        if settled_striker < 30:
+            base_rpo -= (30-settled_striker)/10
+    
+    wickets_lost = 10-wickets_in_hand
+    if over > 10: 
+        base_rpo -= wickets_lost
+    elif over > 25: 
+        base_rpo += (wickets_in_hand-9+over/10) 
+    else: 
+        base_rpo += (wickets_in_hand * 5 - (50 -over))/5
 
 
 
 
-
-    # Step 8: Apply pitch factor
-    target_rpo = (rpo_needed * base_rpo) ** 0.5
-
-    # Step 9: Ensure RPO is between 4 and 12
-    target_rpo = max(3, min(target_rpo, 15))
-
-    return target_rpo/7
+    return max(0.5,base_rpo/5)
 
 
 def simulate_test(team1, team2, venue):
@@ -1315,7 +1322,7 @@ def simulate_ball_test(striker, bowler, pitch, settled_meter, over, aggression):
     # Calculate probability of getting out
     # Higher difficulty increases the chance of getting out
 
-    p_out = base_out * (0.8 - (shot)/30) 
+    p_out = min(base_out * 3, base_out * (0.7 - (shot)/40))
     # Determine if the batter is out
     if random.random() < p_out:
         if pace > 145: 
@@ -1343,7 +1350,7 @@ def simulate_ball_test(striker, bowler, pitch, settled_meter, over, aggression):
 
 
 
-    runs = base_runs * (1 + shot/100) + settled_meter/500
+    runs = base_runs * (1 + shot/100) + settled_meter/1000
 
 
     w = get_ball_probabilities(runs)
@@ -1510,7 +1517,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
         if random.randint(1, 100) < 87:
             # 15% chance of bowling faster
             pace = bowler.bowling_pace + random.gauss(0, 5)
-            difficulty = max(0,(pace - 132))**1.15 # -5/30
+            difficulty = max(0,(pace - 130))**1.15 # -5/30
             pd = difficulty
             slower = False
         else:
@@ -1523,8 +1530,8 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
         
         #print(bowler.name, pace, difficulty)
         # Swing and bounce influenced by pitch grass cover and bounce
-        swing = (bowler.bowling_swing * (pitch.grass_cover))/(100+(100 * over)) * random.gauss(1, 0.2)
-        difficulty *= min(swing, 0.8)
+        swing = ((50-bowler.bowling_swing) * (pitch.grass_cover))/(50 + over * 70)* random.gauss(1, 0.2)
+        difficulty *= max(swing, 0.8)
         bounce = ((bowler.bowling_bounce)/10 + (pitch.bounce)) * random.gauss(1, 0.4)
         seam = (((bowler.bowling_seam) * (pitch.hardness))/40) ** random.gauss(-0.2, 0.9)
         # Accuracy based on bowler's control
@@ -1535,34 +1542,40 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
         # Higher pace, swing, bounce, and accuracy increase difficulty
         # Batter's bonuses (batting_fast, batting_swing, batting_bounce) reduce difficulty
         #print(f"Bowler: {bowler.name} Pace:{pd} swing:{swing} Bounce:{bounce} Seam:{seam} difficulty: {difficulty}")
-        batter_bonus = (striker.batting_fast * (pace-130))/25
-        batter_bonus += (striker.batting_swing * swing)/10
-        batter_bonus += (striker.batting_bounce * bounce)/140
+        batter_bonus = ((striker.batting_fast-50) * (pace-130))/25 #
+        batter_bonus += ((striker.batting_swing-50) * swing)/10
+        batter_bonus += ((striker.batting_bounce-50) * bounce)/140
         #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
     else:
         # Spin bowler: calculate pace (slower), turn, bounce, and accuracy
         pace = bowler.bowling_pace + random.gauss(10, 5)  # Spin pace typically between 60-80 kmph
         turn = max(bowler.bowling_turn * ((pitch.turn)/5)**1.5 * random.gauss(3, 2), 0.2)/100
-        difficulty = (turn**1.2)*5
+        difficulty = (turn**1.1)*4
         #difficulty = max(random.gauss(difficulty,100-bowler.bowling_control),difficulty)
 
-        batter_bonus = striker.batting_spin/6
+        batter_bonus = (striker.batting_spin-50)
         #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
-    batter_bonus += settled_meter/200
+
+    batter_bonus += 3*(settled_meter**0.15)
 
     #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
     if bowler.match_fatigue > 20:
         bowlfmod = (bowler.match_fatigue-20)/60 #0 to 2+ 
+        bowlfmod = max(0,min(bowlfmod,2))
     else: 
-        bowlfmod = (20-bowler.match_fatigue)/20 # 1 to 0
+        bowlfmod = (20-bowler.match_fatigue)/30 # 1 to 0
+        bowlfmod = min(max(bowlfmod,0.1),1)
 
     if striker.match_fatigue > 20:
-        batfmod = (striker.match_fatigue-20)/40 #0 to 2+ 
+        batfmod = (striker.match_fatigue-20)/80 #0 to 2+ 
+        batfmod = max(0,min(batfmod,2))
     else: 
-        batfmod = (20-striker.match_fatigue)/20 # 1 to 0
+        batfmod = (20-striker.match_fatigue)/40 # 1 to 0
+        batfmod = min(max(batfmod,0.1),0)
 
 
-    fatigue_effect = ((batfmod - bowlfmod + 3)/3)**0.3 #  1.4 to 0.6
+
+    fatigue_effect = ((batfmod - bowlfmod + 3)/3)**0.2 #  1.4 to 0.6
 
 
     # Scale factor for difficulty (may need tuning based on testing)
@@ -1570,7 +1583,11 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
     
     # Calculate probability of getting out
     # Higher difficulty increases the chance of getting out
-    p_out = base_out * (0.75 - (shot)/30)/fatigue_effect * aggression
+    #print(shot)
+    #print(f"{difficulty} Shot:{shot} Swing{swing}")
+    aggression = aggression
+    p_out = min(3*base_out*aggression, base_out * (0.7 - (shot)/120) * (aggression))
+
     # Determine if the batter is out
     if random.random() < p_out:
         if pace > 145: 
@@ -1596,7 +1613,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
 
         return 0, True, comments, pace
 
-    runs = base_runs * (0.8 + shot/80)*fatigue_effect * aggression ** 1.5
+    runs = (base_runs)**2 * (1.1 + shot/80)*fatigue_effect * max(aggression, aggression ** 1.5)
     w = get_ball_probabilities(runs)
     r =  random.choices([0,1,2,3,4,5,6], weights=w)[0]
 
@@ -1780,7 +1797,7 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
         
         #print(bowler.name, pace, difficulty)
         # Swing and bounce influenced by pitch grass cover and bounce
-        swing = (bowler.bowling_swing * (pitch.grass_cover))/(100+(100 * over)) * random.gauss(1, 0.2)
+        swing = (bowler.bowling_swing * (pitch.grass_cover))/(50+(20 * over)) * random.gauss(1, 0.2)
         difficulty *= min(swing, 0.8)
         bounce = ((bowler.bowling_bounce)/10 + (pitch.bounce)) * random.gauss(1, 0.4)
         seam = (((bowler.bowling_seam) * (pitch.hardness))/40) ** random.gauss(-0.2, 0.9)
@@ -2456,13 +2473,16 @@ def simulate_t20_innings(batting_team: Team, bowling_team: Team, venue, target=N
                 break
 
             batting_stats[striker.name]["balls"] += 1
-            aggression = calculate_aggression_odi(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name])
+            aggression = calculate_aggression_odi(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets)
             run, out, comments, pace = simulate_ball_t20(striker, bowler, venue, settled_meters[striker.name], over, aggression)
             #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
-            striker.match_fatigue += 20/bowler.fitness
+            striker.match_fatigue += 50/striker.fitness
             if run < 4: 
-                striker.match_fatigue += run * 40/bowler.fitness
-                non_striker.match_fatigue += run * 40/bowler.fitness
+                striker.match_fatigue += run * 70/striker.fitness
+                non_striker.match_fatigue += run * 70/non_striker.fitness
+            else: 
+                striker.match_fatigue += 100/striker.fitness
+                non_striker.match_fatigue += 50/non_striker.fitness
             
             
             if out:
@@ -2528,7 +2548,7 @@ def simulate_odi_innings(batting_team: Team, bowling_team: Team, venue, target=N
                 break
 
             batting_stats[striker.name]["balls"] += 1
-            aggression = calculate_aggression_odi(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name])
+            aggression = calculate_aggression_odi(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets)
             run, out, comments, pace = simulate_ball_odi(striker, bowler, venue, settled_meters[striker.name], over, aggression)
             #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
             striker.match_fatigue += 20/bowler.fitness
@@ -2550,8 +2570,8 @@ def simulate_odi_innings(batting_team: Team, bowling_team: Team, venue, target=N
                 batting_stats[striker.name]["runs"] += run
                 if target and score > target:
                     gamewon = True
-                if settled_meters[striker.name] < 80:
-                    settled_meters[striker.name] += run * 0.65 + 0.4
+                if settled_meters[striker.name] < 100:
+                    settled_meters[striker.name] += run*0.4  + 0.2
                 if run % 2 == 1:
                     striker, non_striker = non_striker, striker
             
@@ -2646,7 +2666,8 @@ def simulate_test_innings(batting_team: Team, bowling_team: Team, venue, target=
         
 def run_simulation_analysis(num_simulations=20, match_format="t20"):
     """
-    Run multiple match simulations and display summary statistics to help fine-tune the simulate_ball methods.
+    Run multiple match simulations, create a histogram of batter scores using existing function,
+    and use random teams each time.
     
     Args:
         num_simulations: Number of simulations to run
@@ -2657,11 +2678,7 @@ def run_simulation_analysis(num_simulations=20, match_format="t20"):
     teams = read_teams("data/teams.csv", players)
     grounds = read_grounds("data/venues.csv")
     
-    # Select two random teams and a random venue for consistent comparison
-    team1, team2 = random.sample(teams, 2)
-    venue = random.choice(grounds)
-    
-    print(f"Running {num_simulations} {match_format.upper()} match simulations between {team1.name} and {team2.name} at {venue.name}")
+    print(f"Running {num_simulations} {match_format.upper()} match simulations")
     
     # Initialize data collection
     match_results = []
@@ -2671,7 +2688,8 @@ def run_simulation_analysis(num_simulations=20, match_format="t20"):
         "wickets_lost": [],
         "boundaries": {"fours": 0, "sixes": 0},
         "dots": 0,
-        "total_balls": 0
+        "total_balls": 0,
+        "batter_scores": []  # New list to store individual batter scores
     }
     bowling_stats = {
         "economy_rates": [],
@@ -2679,42 +2697,36 @@ def run_simulation_analysis(num_simulations=20, match_format="t20"):
     }
     player_performances = {}
     
-    # Initialize player performance tracking
-    for player in team1.players + team2.players:
-        player_performances[player.name] = {
-            "innings": 0,
-            "runs": [],
-            "batting_avg": 0,
-            "balls_faced": [],
-            "strike_rate": [],
-            "overs_bowled": [],
-            "runs_conceded": [],
-            "wickets": [],
-            "economy": []
-        }
-    
     # Run simulations
     for i in range(num_simulations):
-        print(f"Running simulation {i+1}/{num_simulations}...")
+        # Select two random teams and a random venue for each simulation
+        team1, team2 = random.sample(teams, 2)
+        venue = random.choice(grounds)
+        
+        print(f"Running simulation {i+1}/{num_simulations}: {team1.name} vs {team2.name} at {venue.name}...")
         
         # Reset match fitness for all players
         for player in team1.players + team2.players:
             player.set_match_fitness()
             
-        # Run appropriate simulation
+        # Run appropriate simulation and collect batting stats
         if match_format.lower() == "t20":
-            team1_score, team1_wickets, team2_score, team2_wickets = simulate_t20(team1, team2, venue)
+            team1_score, team1_wickets, team1_batting, team1_bowling = simulate_t20_innings(team1, team2, venue)
+            team2_score, team2_wickets, team2_batting, team2_bowling = simulate_t20_innings(team2, team1, venue, team1_score)
         elif match_format.lower() == "odi":
-            team1_score, team1_wickets, team2_score, team2_wickets = simulate_odi(team1, team2, venue)
+            team1_score, team1_wickets, team1_batting, team1_bowling = simulate_odi_innings(team1, team2, venue)
+            team2_score, team2_wickets, team2_batting, team2_bowling = simulate_odi_innings(team2, team1, venue, team1_score)
         elif match_format.lower() == "test":
-            # Test matches need different handling for their stats
+            # Test matches need different handling
             simulate_test(team1, team2, venue)
             continue
         
         # Record match result
         match_results.append({
+            "team1_name": team1.name,
             "team1_score": team1_score,
             "team1_wickets": team1_wickets,
+            "team2_name": team2.name,
             "team2_score": team2_score, 
             "team2_wickets": team2_wickets,
             "winner": team1.name if team1_score > team2_score else team2.name,
@@ -2726,12 +2738,67 @@ def run_simulation_analysis(num_simulations=20, match_format="t20"):
         batting_stats["innings_scores"].extend([team1_score, team2_score])
         batting_stats["wickets_lost"].extend([team1_wickets, team2_wickets])
         
-        # More detailed stats would be collected from the ball-by-ball data
-        # To implement this fully, you would need to modify your simulate_ball methods
-        # to return more detailed statistics
+        # Collect individual batter scores from both teams
+        for stats in [team1_batting, team2_batting]:
+            for player, stat in stats.items():
+                if stat['balls'] > 0:  # Only include players who faced balls
+                    batting_stats["batter_scores"].append(stat['runs'])
     
     # Analyze and display results
     display_simulation_results(match_results, batting_stats, bowling_stats, player_performances, match_format)
+    
+    # Create histogram of batter scores using existing function
+    if batting_stats["batter_scores"]:
+        # Adjust bins for batter scores rather than team totals
+        if match_format.lower() == "t20":
+            bins = [0, 20, 40, 60, 80, 100, 120, 150]
+        elif match_format.lower() == "odi":
+            bins = [0, 25, 50, 75, 100, 125, 150, 200]
+        else:  # test
+            bins = [0, 50, 100, 150, 200, 250, 300, 400]
+        
+        # Temporarily override the bins in create_score_histogram
+        original_bins = create_score_histogram.__defaults__[0] if create_score_histogram.__defaults__ else None
+        create_score_histogram_batter(batting_stats["batter_scores"], match_format, bins)
+        
+        # Print additional batter score statistics
+        avg_batter_score = sum(batting_stats["batter_scores"]) / len(batting_stats["batter_scores"])
+        print(f"\nBatter Score Statistics ({match_format.upper()}):")
+        print(f"Number of batters: {len(batting_stats['batter_scores'])}")
+        print(f"Average batter score: {avg_batter_score:.1f}")
+        print(f"Maximum batter score: {max(batting_stats['batter_scores'])}")
+        print(f"Minimum batter score: {min(batting_stats['batter_scores'])}")
+    else:
+        print("No batter scores available for histogram.")
+
+def create_score_histogram_batter(scores, match_format, bins=None):
+    """Create and print a histogram of scores (modified to accept custom bins)."""
+    # Use custom bins if provided, otherwise use default based on match format
+    if bins is None:
+        if match_format == "t20":
+            bins = [0, 100, 125, 150, 175, 200, 225, 250]
+        elif match_format == "odi":
+            bins = [0, 150, 200, 250, 300, 350, 400, 450]
+        else:  # test
+            bins = [0, 100, 200, 300, 400, 500, 600, 700]
+    
+    # Count scores in each bin
+    bin_counts = [0] * (len(bins) - 1)
+    for score in scores:
+        for i in range(len(bins) - 1):
+            if bins[i] <= score < bins[i+1]:
+                bin_counts[i] += 1
+                break
+    
+    # Create ASCII histogram
+    max_count = max(bin_counts) if bin_counts else 0
+    scale = 40 / max_count if max_count > 0 else 1
+    
+    print(f"\nIndividual Batter Score Distribution ({match_format.upper()}):")
+    for i in range(len(bins) - 1):
+        label = f"{bins[i]}-{bins[i+1]-1}"
+        bar = "#" * int(bin_counts[i] * scale)
+        print(f"{label:10} | {bar} {bin_counts[i]}")
 
 def display_simulation_results(match_results, batting_stats, bowling_stats, player_performances, match_format):
     """Display summary statistics from the simulations."""
@@ -2824,7 +2891,7 @@ def create_score_histogram(scores, match_format):
         print(f"{label:10} | {bar} {bin_counts[i]}")
 
 
-def collect_ball_data(match_format="t20", num_balls=1000):
+def collect_ball_data(match_format="t20", num_balls=100000000):
     """
     Collect and analyze individual ball data to fine-tune the simulate_ball methods.
     
@@ -2836,17 +2903,7 @@ def collect_ball_data(match_format="t20", num_balls=1000):
     teams = read_teams("data/teams.csv", players)
     grounds = read_grounds("data/venues.csv")
     
-    # Select random players and venue
-    batting_team = random.choice(teams)
-    bowling_team = random.choice([t for t in teams if t != batting_team])
-    venue = random.choice(grounds)
-    
-    batsmen = batting_team.players[:6]  # Top 6 batsmen
-    bowlers = bowling_team.players[-4:]  # Decent bowlers
-    
-    # Validate we have enough players
-    if not bowlers:
-        bowlers = bowling_team.players[:3]  # Just take first 3 if no good bowlers
+
     
     print(f"Analyzing {num_balls} balls for {match_format} format")
     
@@ -2866,6 +2923,15 @@ def collect_ball_data(match_format="t20", num_balls=1000):
     
     # Run ball simulations
     for i in range(num_balls):
+
+            # Select random players and venue
+        batting_team = random.choice(teams)
+        bowling_team = random.choice([t for t in teams if t != batting_team])
+        venue = random.choice(grounds)
+        
+        batsmen = batting_team.players[:6]  # Top 6 batsmen
+        bowlers = bowling_team.players[-4:]  # Decent bowlers
+        
         # Select random batsman and bowler
         batsman = random.choice(batsmen)
         bowler = random.choice(bowlers)
@@ -2996,8 +3062,12 @@ def analyze_ball_data_results(results, match_format, num_balls):
         # Similar recommendations for Test format
 
 # Run the bot
+
+
 # For analyzing multiple match simulations
-run_simulation_analysis(num_simulations=10, match_format="t20")
+run_simulation_analysis(num_simulations=100, match_format="t20")
 
 # For analyzing individual ball data
-collect_ball_data(match_format="t20", num_balls=1000)
+collect_ball_data(match_format="t20", num_balls=100000)
+
+#play_match("IND","ENG","Lord's","ODI")
