@@ -999,55 +999,67 @@ def play_match(team1name: str, team2name: str, venuename: str, format: str):
     if format.upper() == "T20":
         simulate_t20(team1,team2, ground)
 
-
-
-import math
-import math
-
-def calculate_aggression_t20(over, pitch, target, striker, non_striker, settled_striker, settled_non_striker):
+def calculate_aggression_t20(over, pitch, target, striker, non_striker, settled_striker, settled_non_striker, wickets_in_hand, score):
     """
-    Determines the appropriate aggression level (target RPO) for an ODI innings continuously.
+    Determines the appropriate aggression level for a T20 innings continuously.
 
     Parameters:
-    - over (int): The current over number.
-    - pitch (dict): A dictionary containing pitch conditions (pace, turn, bounce, grass_cover).
-    - target (int or None): The target score (None if batting first).
-    - striker (player object): The striker with attributes like odi_ave and odi_sr.
-    - non_striker (player object): The non-striker with attributes like odi_ave and odi_sr.
-    - settled_striker (float): The settled meter value of the striker (0 to 10).
-    - settled_non_striker (float): The settled meter value of the non-striker (0 to 10).
+    - over (float): The current over number (0 to 19.5).
+    - pitch (dict): Pitch conditions (pace, turn, bounce, grass_cover) - not used here.
+    - target (int or None): Target score (None if batting first).
+    - striker (object): Striker with attributes like odi_ave, odi_sr - not used here.
+    - non_striker (object): Non-striker with attributes like odi_ave, odi_sr - not used here.
+    - settled_striker (float): Striker's settled meter (0 to 100).
+    - settled_non_striker (float): Non-striker's settled meter (0 to 100).
+    - wickets_in_hand (int): Number of wickets remaining (1 to 10).
 
     Returns:
-    - float: The recommended aggression level as target_rpo.
+    - float: Recommended aggression level (0.5 to 2.0+), per provided data.
     """
-    # Step 1: Calculate base RPO based on over (baseline)
-    base_rpo = 4  # Standard ODI base RPO
+    base_rpo = 9  # Standard T20 base RPO
+
+    # Phase-based adjustment
     if over < 6:
-        base_rpo += 4 * math.log(over + 1, 2.7)  # Powerplay: aggressive start
-    elif over < 14:
-        base_rpo += 1.2 * 3.7 ** ((over - 6) / 25)  # Middle overs: steady increase
+        base_rpo += -1 + math.log(over + 1, 2.7)      # Powerplay: aggressive start
+    elif over < 15:
+        base_rpo += 1.4 * 3.5 ** ((over - 15) / 25)  # Middle overs: steady increase
     else:
-        base_rpo += 2 * (over - 35) / 100 + 2.7 ** ((over - 15) / 8)  # Death overs: sharp rise
+        base_rpo += ((over - 15))**1.2            # Death overs: ramp up to ~14 RPO by over 19
 
+    # Settled striker adjustment (assuming 0-100 scale)
+    if settled_striker < 30:
+        base_rpo -= (40 - settled_striker) / 10
 
-    # Step 3: Target chasing adjustment
-    if target is not None and over < 50:
-        rpo_needed = target / (50 - over)
-        target_factor = 1 + (1 / (1 + math.exp(-0.5 * (rpo_needed - base_rpo)))) - 0.5
+    # Wicket adjustment
+    wickets_lost = 10 - wickets_in_hand
+    if over > 6:
+        base_rpo -= wickets_lost * 1.5  # Less harsh penalty
+    else:
+        base_rpo += (wickets_in_hand - 7 + over / 5)  # Encourage aggression early
+
+    # Target chasing adjustment
+    if target is not None:
+        rpo_needed = (target-score)/ (20 - over)  # Approximate required RPO
+        target_factor = 1 + (1 / (1 + math.exp(-0.5 * (rpo_needed - base_rpo))))
         base_rpo *= target_factor
-    else:
-        rpo_needed = base_rpo + 1
-    # Step 8: Apply pitch factor
-
-    target_rpo = (rpo_needed * base_rpo) ** 0.5
-
-    # Step 9: Ensure RPO is between 4 and 12
-    target_rpo = max(3, min(target_rpo, 15))
-
-    return base_rpo/9
 
 
-def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_striker, settled_non_striker,wickets_in_hand):
+    if over > 15:  
+        base_rpo += (over-15) ** 0.4
+    # Convert to aggression level
+    aggression = base_rpo / 7.5
+    minbyphase = 3
+    if over < 6: 
+        minbyphase = 1.8
+    if over < 15:
+        minbyphase = 2
+    else: 
+        base_rpo += wickets_in_hand - 4
+
+    
+    return min(max(0.5, aggression),minbyphase)  # Align with data’s minimum
+
+def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_striker, settled_non_striker,wickets_in_hand, score):
     """
     Determines the appropriate aggression level (target RPO) for an ODI innings continuously.
 
@@ -1077,7 +1089,7 @@ def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_
 
     # Step 3: Target chasing adjustment
     if target is not None and over < 50:
-        rpo_needed = target / (50 - over)
+        rpo_needed = (target-score) / (50 - over)
         target_factor = 1 + (1 / (1 + math.exp(-0.5 * (rpo_needed - base_rpo)))) - 0.5
         base_rpo *= target_factor
 
@@ -1247,7 +1259,7 @@ def simulate_ball_test(striker, bowler, pitch, settled_meter, over, aggression):
     """
     # Calculate base runs and out probabilities from striker's ODI stats
     base_runs = striker.test_sr / 100  # Expected runs per ball
-    base_out = base_runs / striker.test_ave # Base probability of getting out
+    base_out = base_runs * 45 / striker.test_ave**2 # Base probability of getting out
     turn, swing, seam, bounce, slower = 0, 0, 0, 0, False
     comments = []
 
@@ -1530,7 +1542,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
         
         #print(bowler.name, pace, difficulty)
         # Swing and bounce influenced by pitch grass cover and bounce
-        swing = ((50-bowler.bowling_swing) * (pitch.grass_cover))/(50 + over * 70)* random.gauss(1, 0.2)
+        swing = ((bowler.bowling_swing -50)**2 * (pitch.grass_cover))/(50 + over * 70)* random.gauss(1, 0.2)
         difficulty *= max(swing, 0.8)
         bounce = ((bowler.bowling_bounce)/10 + (pitch.bounce)) * random.gauss(1, 0.4)
         seam = (((bowler.bowling_seam) * (pitch.hardness))/40) ** random.gauss(-0.2, 0.9)
@@ -1586,7 +1598,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
     #print(shot)
     #print(f"{difficulty} Shot:{shot} Swing{swing}")
     aggression = aggression
-    p_out = min(3*base_out*aggression, base_out * (0.7 - (shot)/120) * (aggression))
+    p_out = max(3*base_out*aggression, base_out * (0.6 - (shot)/80) * (aggression ** 0.8)) 
 
     # Determine if the batter is out
     if random.random() < p_out:
@@ -1613,7 +1625,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
 
         return 0, True, comments, pace
 
-    runs = (base_runs)**2 * (1.1 + shot/80)*fatigue_effect * max(aggression, aggression ** 1.5)
+    runs = (base_runs)**2 * (1 + shot/80)*fatigue_effect * max(aggression, aggression ** 1.2)
     w = get_ball_probabilities(runs)
     r =  random.choices([0,1,2,3,4,5,6], weights=w)[0]
 
@@ -1773,8 +1785,8 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
     - pace (float): speed of the ball
     """
     # Calculate base runs and out probabilities from striker's ODI stats
-    base_runs = (striker.t20_sr+20)/ 100  # Expected runs per ball
-    base_out = base_runs / striker.t20_ave # Base probability of getting out
+    base_runs = (striker.t20_sr)/ 100  # Expected runs per ball
+    base_out = base_runs/striker.t20_ave  # Base probability of getting out
     turn, swing, seam, bounce, slower = 0, 0, 0, 0, False
     comments = []
 
@@ -1784,7 +1796,7 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
         if random.randint(1, 100) < 87:
             # 15% chance of bowling faster
             pace = bowler.bowling_pace + random.gauss(0, 5)
-            difficulty = max(0,(pace - 132))**1.15 # -5/30
+            difficulty = max(0,(pace - 130))**1.15 # -5/30
             pd = difficulty
             slower = False
         else:
@@ -1797,8 +1809,8 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
         
         #print(bowler.name, pace, difficulty)
         # Swing and bounce influenced by pitch grass cover and bounce
-        swing = (bowler.bowling_swing * (pitch.grass_cover))/(50+(20 * over)) * random.gauss(1, 0.2)
-        difficulty *= min(swing, 0.8)
+        swing = ((bowler.bowling_swing - 50)**2 * (pitch.grass_cover))/(50 + over * 70)* random.gauss(1, 0.2)
+        difficulty *= max(swing, 0.8)
         bounce = ((bowler.bowling_bounce)/10 + (pitch.bounce)) * random.gauss(1, 0.4)
         seam = (((bowler.bowling_seam) * (pitch.hardness))/40) ** random.gauss(-0.2, 0.9)
         # Accuracy based on bowler's control
@@ -1822,7 +1834,7 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
 
         batter_bonus = striker.batting_spin/6
         #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
-    batter_bonus += settled_meter/200
+    batter_bonus += 3.5*(settled_meter**0.2)
 
     #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
     if bowler.match_fatigue > 20:
@@ -1849,7 +1861,9 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
     
     # Calculate probability of getting out
     # Higher difficulty increases the chance of getting out
-    p_out = base_out * (1 - (shot)/30)/fatigue_effect * aggression 
+    p_out = min(2*base_out*aggression**2, base_out * (1 - (shot)/100) * (aggression ** 2))
+    if settled_meter < 20: 
+        p_out /= (striker.t20_ave/15)
     # Determine if the batter is out
     if random.random() < p_out:
         if pace > 145: 
@@ -1875,7 +1889,7 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
 
         return 0, True, comments, pace
 
-    runs = random.gauss(base_runs * (1.4 + shot/40)*fatigue_effect * aggression, 0.3) + settled_meter/50
+    runs = ((base_runs+0.1)**1.17+0.1) * (1.6+ shot/100)*fatigue_effect * (aggression+0.1) ** 1.5
     w = get_ball_probabilities(runs)
     r =  random.choices([0,1,2,3,4,5,6], weights=w)[0]
 
@@ -2473,7 +2487,7 @@ def simulate_t20_innings(batting_team: Team, bowling_team: Team, venue, target=N
                 break
 
             batting_stats[striker.name]["balls"] += 1
-            aggression = calculate_aggression_odi(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets)
+            aggression = calculate_aggression_t20(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets, score)
             run, out, comments, pace = simulate_ball_t20(striker, bowler, venue, settled_meters[striker.name], over, aggression)
             #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
             striker.match_fatigue += 50/striker.fitness
@@ -2499,7 +2513,7 @@ def simulate_t20_innings(batting_team: Team, bowling_team: Team, venue, target=N
                 if target and score > target:
                     gamewon = True
                 if settled_meters[striker.name] < 50:
-                    settled_meters[striker.name] += -0.4 + run*0.8
+                    settled_meters[striker.name] += 0.4 + run*1.2
                 if run % 2 == 1:
                     striker, non_striker = non_striker, striker
             
@@ -2548,7 +2562,7 @@ def simulate_odi_innings(batting_team: Team, bowling_team: Team, venue, target=N
                 break
 
             batting_stats[striker.name]["balls"] += 1
-            aggression = calculate_aggression_odi(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets)
+            aggression = calculate_aggression_odi(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets, score)
             run, out, comments, pace = simulate_ball_odi(striker, bowler, venue, settled_meters[striker.name], over, aggression)
             #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
             striker.match_fatigue += 20/bowler.fitness
@@ -3070,4 +3084,4 @@ run_simulation_analysis(num_simulations=100, match_format="t20")
 # For analyzing individual ball data
 collect_ball_data(match_format="t20", num_balls=100000)
 
-#play_match("IND","ENG","Lord's","ODI")
+play_match("IND","ENG","Lord's","t20")
