@@ -8,6 +8,7 @@ import math
 import asyncio
 import time
 import random
+from commentary import *
 
 import numpy as np
 from scipy.optimize import minimize
@@ -416,7 +417,7 @@ def simulate_test(team1, team2, venue):
         target = team1_score1 + team1_score2 - team2_score1 + 1
         if target < 0: 
             print(f"{team2.name} wins by an innings and {-target} runs")
-            return{team2.name}
+            return team2.name
         print(f"{team2.name} needs {target} runs to win in the final innings!")
         team2_score2, team2_wickets2, team2_batting_stats2, team2_bowling_stats2 = simulate_test_innings(team2, team1, pitch, target=target)
         display_scorecard_discord(team2.name, team2_batting_stats2, team2_bowling_stats2)
@@ -425,11 +426,11 @@ def simulate_test(team1, team2, venue):
         if team2_score2 >= target:
             wickets_remaining = 10 - team2_wickets2
             print(f"{team2.name} wins by {wickets_remaining} wickets!")
-            return{team2.name}
+            return team2.name
         else:
             runs_short = target - team2_score2
             print(f"{team1.name} wins by {runs_short} runs!")
-            return{team1.name}
+            return team1.name
 
 
 
@@ -883,7 +884,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
     #print(shot)
     #print(f"{difficulty} Shot:{shot} Swing{swing}")
     aggression = aggression
-    p_out = max(3*base_out*aggression, base_out * (0.6 - (shot)/80) * (aggression ** 0.8)) 
+    p_out = min(3*base_out*aggression, base_out * (0.6 - (shot)/80) * (aggression ** 0.8)) 
 
     # Determine if the batter is out
     if random.random() < p_out:
@@ -1970,16 +1971,24 @@ def simulate_test_innings(batting_team: Team, bowling_team: Team, venue, target=
         bowled_overs[bowler.name] = bowled_overs.get(bowler.name, 0) + 1
     
     return score, wickets, batting_stats, bowling_stats
-        
+
+
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+
+import pandas as pd
+import scipy.stats as stats
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 def run_simulation_analysis(num_simulations=20, match_format="t20"):
-    """
-    Run multiple match simulations, create a histogram of batter scores using existing function,
-    and use random teams each time.
-    
-    Args:
-        num_simulations: Number of simulations to run
-        match_format: Match format ("t20", "odi", or "test")
-    """
     # Load data
     players = read_cricketers("data/players.csv")
     teams = read_teams("data/teams.csv", players)
@@ -1989,94 +1998,264 @@ def run_simulation_analysis(num_simulations=20, match_format="t20"):
     
     # Initialize data collection
     match_results = []
-    batting_stats = {
-        "total_runs": [],
-        "innings_scores": [],
-        "wickets_lost": [],
-        "boundaries": {"fours": 0, "sixes": 0},
-        "dots": 0,
-        "total_balls": 0,
-        "batter_scores": []  # New list to store individual batter scores
-    }
-    bowling_stats = {
-        "economy_rates": [],
-        "wicket_takers": {}
-    }
-    player_performances = {}
+    batting_stats = {"total_runs": [], "innings_scores": [], "wickets_lost": [], "batter_scores": []}
+    player_performances = {"batting": {}, "bowling": {}}
+    
+    player_data = {"batting": [], "bowling": []}
+    player_attributes = {p.name: p for team in teams for p in team.players}
     
     # Run simulations
     for i in range(num_simulations):
-        # Select two random teams and a random venue for each simulation
         team1, team2 = random.sample(teams, 2)
         venue = random.choice(grounds)
+        print(f"Simulation {i+1}/{num_simulations}: {team1.name} vs {team2.name} at {venue.name}")
         
-        print(f"Running simulation {i+1}/{num_simulations}: {team1.name} vs {team2.name} at {venue.name}...")
-        
-        # Reset match fitness for all players
         for player in team1.players + team2.players:
             player.set_match_fitness()
-            
-        # Run appropriate simulation and collect batting stats
-        if match_format.lower() == "t20":
-            team1_score, team1_wickets, team1_batting, team1_bowling = simulate_t20_innings(team1, team2, venue)
-            team2_score, team2_wickets, team2_batting, team2_bowling = simulate_t20_innings(team2, team1, venue, team1_score)
-        elif match_format.lower() == "odi":
-            team1_score, team1_wickets, team1_batting, team1_bowling = simulate_odi_innings(team1, team2, venue)
-            team2_score, team2_wickets, team2_batting, team2_bowling = simulate_odi_innings(team2, team1, venue, team1_score)
-        elif match_format.lower() == "test":
-            # Test matches need different handling
-            team1_score, team1_wickets, team1_batting, team1_bowling = simulate_test_innings(team1, team2, venue)
-            team2_score, team2_wickets, team2_batting, team2_bowling = simulate_test_innings(team1, team2, venue)
         
-        # Record match result
+        if match_format.lower() == "t20":
+            t1_s, t1_w, t1_bat, t1_bowl = simulate_t20_innings(team1, team2, venue)
+            t2_s, t2_w, t2_bat, t2_bowl = simulate_t20_innings(team2, team1, venue, t1_s)
+        elif match_format.lower() == "odi":
+            t1_s, t1_w, t1_bat, t1_bowl = simulate_odi_innings(team1, team2, venue)
+            t2_s, t2_w, t2_bat, t2_bowl = simulate_odi_innings(team2, team1, venue, t1_s)
+        else:  # test
+            t1_s, t1_w, t1_bat, t1_bowl = simulate_test_innings(team1, team2, venue)
+            t2_s, t2_w, t2_bat, t2_bowl = simulate_test_innings(team2, team1, venue, t1_s)
+        
         match_results.append({
-            "team1_name": team1.name,
-            "team1_score": team1_score,
-            "team1_wickets": team1_wickets,
-            "team2_name": team2.name,
-            "team2_score": team2_score, 
-            "team2_wickets": team2_wickets,
-            "winner": team1.name if team1_score > team2_score else team2.name,
-            "margin": f"{team1_score - team2_score} runs" if team1_score > team2_score else f"{10 - team2_wickets} wickets"
+            "team1_name": team1.name, "team1_score": t1_s, "team1_wickets": t1_w,
+            "team2_name": team2.name, "team2_score": t2_s, "team2_wickets": t2_w,
+            "winner": team1.name if t1_s > t2_s else team2.name
         })
         
-        # Record batting stats
-        batting_stats["total_runs"].append(team1_score + team2_score)
-        batting_stats["innings_scores"].extend([team1_score, team2_score])
-        batting_stats["wickets_lost"].extend([team1_wickets, team2_wickets])
+        batting_stats["total_runs"].append(t1_s + t2_s)
+        batting_stats["innings_scores"].extend([t1_s, t2_s])
+        batting_stats["wickets_lost"].extend([t1_w, t2_w])
         
-        # Collect individual batter scores from both teams
-        for stats in [team1_batting, team2_batting]:
-            for player, stat in stats.items():
-                if stat['balls'] > 0:  # Only include players who faced balls
-                    batting_stats["batter_scores"].append(stat['runs'])
+        def update_performance(stats, team_name, bat_or_bowl, perf_list):
+            for player_name, stat in stats.items():
+                if player_name not in player_performances[bat_or_bowl]:
+                    player_performances[bat_or_bowl][player_name] = {
+                        "team": team_name,
+                        "runs": 0, "balls": 0, "innings": 0, "outs": 0
+                    } if bat_or_bowl == "batting" else {
+                        "team": team_name, "overs": 0, "runs": 0, "wickets": 0
+                    }
+                p = player_performances[bat_or_bowl][player_name]
+                player_obj = player_attributes[player_name]
+                
+                if bat_or_bowl == "batting" and stat["balls"] > 0:
+                    p["runs"] += stat["runs"]
+                    p["balls"] += stat["balls"]
+                    p["innings"] += 1
+                    p["outs"] += 1 if stat["out"] else 0
+                    batting_stats["batter_scores"].append(stat["runs"])
+                    perf_list.append({
+                        "name": player_name,
+                        "runs": stat["runs"],
+                        "balls": stat["balls"],
+                        "out": stat["out"],
+                        "batting_fast": player_obj.batting_fast,
+                        "batting_swing": player_obj.batting_swing,
+                        "batting_bounce": player_obj.batting_bounce,
+                        "batting_spin": player_obj.batting_spin,
+                        "batting_rotation": player_obj.batting_rotation,
+                        "fitness": player_obj.fitness,
+                        "format_avg": player_obj.t20_ave if match_format == "t20" else player_obj.odi_ave if match_format == "odi" else player_obj.test_ave,
+                        "format_sr": player_obj.t20_sr if match_format == "t20" else player_obj.odi_sr if match_format == "odi" else player_obj.test_sr
+                    })
+                elif bat_or_bowl == "bowling" and stat["overs"] > 0:
+                    p["overs"] += stat["overs"]
+                    p["runs"] += stat["runs"]
+                    p["wickets"] += stat["wickets"]
+                    perf_list.append({
+                        "name": player_name,
+                        "overs": stat["overs"],
+                        "runs": stat["runs"],
+                        "wickets": stat["wickets"],
+                        "bowling_pace": player_obj.bowling_pace,
+                        "bowling_swing": getattr(player_obj, "bowling_swing", 0),
+                        "bowling_bounce": player_obj.bowling_bounce,
+                        "bowling_turn": player_obj.bowling_turn,
+                        "bowling_control": player_obj.bowling_control,
+                        "fitness": player_obj.fitness
+                    })
+        
+        update_performance(t1_bat, team1.name, "batting", player_data["batting"])
+        update_performance(t2_bat, team2.name, "batting", player_data["batting"])
+        update_performance(t1_bowl, team1.name, "bowling", player_data["bowling"])
+        update_performance(t2_bowl, team2.name, "bowling", player_data["bowling"])
     
-    # Analyze and display results
-    display_simulation_results(match_results, batting_stats, bowling_stats, player_performances, match_format)
+    # Convert to DataFrames
+    batting_df = pd.DataFrame(player_data["batting"])
+    bowling_df = pd.DataFrame(player_data["bowling"])
     
-    # Create histogram of batter scores using existing function
-    if batting_stats["batter_scores"]:
-        # Adjust bins for batter scores rather than team totals
-        if match_format.lower() == "t20":
-            bins = [0, 20, 40, 60, 80, 100, 120, 150]
-        elif match_format.lower() == "odi":
-            bins = [0, 25, 50, 75, 100, 125, 150, 200]
-        else:  # test
-            bins = [0, 50, 100, 150, 200, 250, 300, 400]
-        
-        # Temporarily override the bins in create_score_histogram
-        original_bins = create_score_histogram.__defaults__[0] if create_score_histogram.__defaults__ else None
-        create_score_histogram_batter(batting_stats["batter_scores"], match_format, bins)
-        
-        # Print additional batter score statistics
-        avg_batter_score = sum(batting_stats["batter_scores"]) / len(batting_stats["batter_scores"])
-        print(f"\nBatter Score Statistics ({match_format.upper()}):")
-        print(f"Number of batters: {len(batting_stats['batter_scores'])}")
-        print(f"Average batter score: {avg_batter_score:.1f}")
-        print(f"Maximum batter score: {max(batting_stats['batter_scores'])}")
-        print(f"Minimum batter score: {min(batting_stats['batter_scores'])}")
-    else:
-        print("No batter scores available for histogram.")
+    # Calculate key metrics
+    batting_df["strike_rate"] = (batting_df["runs"] / batting_df["balls"]) * 100
+    bowling_df["economy"] = bowling_df["runs"] / bowling_df["overs"]
+    bowling_df["strike_rate"] = (bowling_df["overs"] * 6) / bowling_df["wickets"].replace(0, float('inf'))
+    
+    # Regression analysis
+    batting_attrs = ["batting_fast", "batting_swing", "batting_bounce", "batting_spin", "batting_rotation", "fitness", "format_avg", "format_sr"]
+    bowling_attrs = ["bowling_pace", "bowling_swing", "bowling_bounce", "bowling_turn", "bowling_control", "fitness"]
+    
+    # Batting regression (predict runs)
+    X_batting = batting_df[batting_attrs]
+    y_batting = batting_df["runs"]
+    batting_model = LinearRegression()
+    batting_model.fit(X_batting, y_batting)
+    batting_coefs = dict(zip(batting_attrs, batting_model.coef_))
+    
+    # Bowling regression (predict wickets)
+    X_bowling_wickets = bowling_df[bowling_attrs]
+    y_bowling_wickets = bowling_df["wickets"]
+    bowling_wickets_model = LinearRegression()
+    bowling_wickets_model.fit(X_bowling_wickets, y_bowling_wickets)
+    bowling_wickets_coefs = dict(zip(bowling_attrs, bowling_wickets_model.coef_))
+    
+    # Bowling regression (predict runs conceded)
+    y_bowling_runs = bowling_df["runs"]
+    bowling_runs_model = LinearRegression()
+    bowling_runs_model.fit(X_bowling_wickets, y_bowling_runs)
+    bowling_runs_coefs = dict(zip(bowling_attrs, bowling_runs_model.coef_))
+    
+    # Standardize coefficients for comparison (optional, scales by standard deviation)
+    X_batting_std = X_batting.std()
+    batting_coefs_std = {attr: coef * X_batting_std[attr] for attr, coef in batting_coefs.items()}
+    X_bowling_std = X_bowling_wickets.std()
+    bowling_wickets_coefs_std = {attr: coef * X_bowling_std[attr] for attr, coef in bowling_wickets_coefs.items()}
+    bowling_runs_coefs_std = {attr: coef * X_bowling_std[attr] for attr, coef in bowling_runs_coefs.items()}
+    
+    # Display coefficients
+    print(f"\nBatting Stat Coefficients for Runs Scored ({match_format.upper()}):")
+    for attr, coef in batting_coefs_std.items():
+        print(f"{attr}: {coef:.3f}")
+    
+    print(f"\nBowling Stat Coefficients for Runs Conceded ({match_format.upper()}):")
+    for attr, coef in bowling_runs_coefs_std.items():
+        print(f"{attr}: {coef:.3f}")
+    
+    print(f"\nBowling Stat Coefficients for Wickets Taken ({match_format.upper()}):")
+    for attr, coef in bowling_wickets_coefs_std.items():
+        print(f"{attr}: {coef:.3f}")
+    
+    # Plot coefficients
+    fig = make_subplots(rows=1, cols=2, subplot_titles=("Batting Stat Impact on Runs", "Bowling Stat Impact on Wickets"))
+    
+    fig.add_trace(
+        go.Bar(x=list(batting_coefs_std.keys()), y=list(batting_coefs_std.values()), name="Batting (Runs)"),
+        row=1, col=1
+    )
+    
+    fig.add_trace(
+        go.Bar(x=list(bowling_wickets_coefs_std.keys()), y=list(bowling_wickets_coefs_std.values()), name="Bowling (Wickets)"),
+        row=1, col=2
+    )
+    
+    fig.update_layout(title_text=f"Stat Impact Analysis ({match_format.upper()})", height=500, width=1000, showlegend=False)
+    fig.update_yaxes(title_text="Standardized Coefficient", row=1, col=1)
+    fig.update_yaxes(title_text="Standardized Coefficient", row=1, col=2)
+    fig.show()
+
+
+def create_player_performance_plots(player_performances, match_format):
+    """
+    Create two Plotly scatter plots for batting and bowling performances.
+    """
+    # Prepare batting data
+    batting_data = []
+    for player_name, stats in player_performances["batting"].items():
+        if stats["innings"] > 0:  # Only include players with at least one innings
+            avg = stats["runs"] / stats["innings"] if stats["innings"] > 0 else 0
+            sr = (stats["runs"] / stats["balls"]) * 100 if stats["balls"] > 0 else 0
+            batting_data.append({
+                "name": player_name,
+                "team": stats["team"],
+                "avg": avg,
+                "sr": sr,
+                "runs": stats["runs"]
+            })
+    
+    # Prepare bowling data
+    bowling_data = []
+    for player_name, stats in player_performances["bowling"].items():
+        if stats["overs"] > 0:  # Only include players who bowled
+            economy = stats["runs"] / stats["overs"] if stats["overs"] > 0 else 0
+            strike_rate = (stats["overs"] * 6) / stats["wickets"] if stats["wickets"] > 0 else float('inf')
+            bowling_data.append({
+                "name": player_name,
+                "team": stats["team"],
+                "economy": economy,
+                "strike_rate": strike_rate,
+                "wickets": stats["wickets"]
+            })
+    
+    # Create subplots
+    fig = make_subplots(rows=1, cols=2, 
+                        subplot_titles=(f"Batting: Avg vs SR ({match_format.upper()})", 
+                                       f"Bowling: Economy vs SR ({match_format.upper()})"),
+                        horizontal_spacing=0.15)
+    
+    # Batting scatter plot
+    teams = list(set([d["team"] for d in batting_data]))
+    for team in teams:
+        team_data = [d for d in batting_data if d["team"] == team]
+        fig.add_trace(
+            go.Scatter(
+                x=[d["avg"] for d in team_data],
+                y=[d["sr"] for d in team_data],
+                text=[d["name"] for d in team_data],
+                mode="markers",
+                name=team,
+                marker=dict(
+                    size=[min(d["runs"] / 10, 50) for d in team_data],  # Cap size at 50
+                    sizemode="area",
+                    sizeref=0.1
+                ),
+                hovertemplate="%{text}<br>Avg: %{x:.1f}<br>SR: %{y:.1f}<br>Runs: %{customdata}",
+                customdata=[d["runs"] for d in team_data]
+            ),
+            row=1, col=1
+        )
+    
+    # Bowling scatter plot
+    for team in teams:
+        team_data = [d for d in bowling_data if d["team"] == team]
+        fig.add_trace(
+            go.Scatter(
+                x=[d["economy"] for d in team_data],
+                y=[d["strike_rate"] for d in team_data],
+                text=[d["name"] for d in team_data],
+                mode="markers",
+                name=team,
+                marker=dict(
+                    size=[min(d["wickets"] * 5, 50) for d in team_data],  # Cap size at 50
+                    sizemode="area",
+                    sizeref=0.1
+                ),
+                hovertemplate="%{text}<br>Econ: %{x:.1f}<br>SR: %{y:.1f}<br>Wickets: %{customdata}",
+                customdata=[d["wickets"] for d in team_data],
+                showlegend=False  # Avoid duplicating legend
+            ),
+            row=1, col=2
+        )
+    
+    # Update layout
+    fig.update_layout(
+        title_text=f"Player Performance Analysis ({match_format.upper()})",
+        height=600,
+        width=1200,
+        showlegend=True
+    )
+    fig.update_xaxes(title_text="Batting Average", row=1, col=1)
+    fig.update_yaxes(title_text="Strike Rate", row=1, col=1)
+    fig.update_xaxes(title_text="Economy Rate", row=1, col=2)
+    fig.update_yaxes(title_text="Bowling Strike Rate", row=1, col=2)
+    
+    # Show the plot
+    fig.show()
+
 
 def create_score_histogram_batter(scores, match_format, bins=None):
     """Create and print a histogram of scores (modified to accept custom bins)."""
@@ -2386,8 +2565,5 @@ def play_ashes(n):
 
 
 # For analyzing multiple match simulations
-run_simulation_analysis(num_simulations=100, match_format="test")
-
-# For analyzing individual ball data
-#collect_ball_data(match_format="test", num_balls=100000)
-play_ashes(1)
+# run_simulation_analysis(num_simulations=100, match_format="test")
+run_simulation_analysis(num_simulations=1000, match_format="test")

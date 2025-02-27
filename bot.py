@@ -696,5 +696,3 @@ async def simulate_odi_innings(ctx, batting_team: Team, bowling_team: Team, venu
 
 
 # Run the bot
-
-bot.run('MTI5ODM3MTAzMjg5MzA5NjAyNw.GXSyZA.y_78Wbzx8ZT4f1e3V5iJBmyDMDE9-XY4rnJDzE')
