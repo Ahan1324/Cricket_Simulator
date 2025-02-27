@@ -190,6 +190,9 @@ async def simulate_test_innings(ctx, batting_team: Team, bowling_team: Team, ven
 
     striker = batting_team.players[0]
     non_striker = batting_team.players[1]
+
+    for bowler in bowling_team.players: 
+        bowler.match_fatigue = bowler.fatigue
     
     for over in range(200):
         if wickets >= 10 or gamewon:
@@ -212,7 +215,7 @@ async def simulate_test_innings(ctx, batting_team: Team, bowling_team: Team, ven
                 await ctx.send(f"{over}.{ball+1} {bowler.name} to {striker.name} | {round(pace,1)} kmph | OUT! | {random.choice(comments)} | {score}/{wickets}")
             elif run > 3:
                 await ctx.send(f"{over}.{ball+1} {bowler.name} to {striker.name} | {round(pace,1)} kmph | {run} Runs |  {random.choice(comments)} |{score}/{wickets}")
-            striker.match_fatigue += 10/bowler.fitness
+            striker.match_fatigue += 40/bowler.fitness
             if run < 4: 
                 striker.match_fatigue += run * 20/bowler.fitness
                 non_striker.match_fatigue += run * 20/bowler.fitness
@@ -231,8 +234,8 @@ async def simulate_test_innings(ctx, batting_team: Team, bowling_team: Team, ven
                 batting_stats[striker.name]["runs"] += run
                 if target and score > target:
                     gamewon = True
-                if settled_meters[striker.name] < 80:
-                    settled_meters[striker.name] += run * 0.3 + 0.2
+                if settled_meters[striker.name] < 50:
+                    settled_meters[striker.name] += run * 0.3 + 0.4
                 if run % 2 == 1:
                     striker, non_striker = non_striker, striker
             
@@ -694,3 +697,4 @@ async def simulate_odi_innings(ctx, batting_team: Team, bowling_team: Team, venu
 
 # Run the bot
 
+bot.run('MTI5ODM3MTAzMjg5MzA5NjAyNw.GXSyZA.y_78Wbzx8ZT4f1e3V5iJBmyDMDE9-XY4rnJDzE')
