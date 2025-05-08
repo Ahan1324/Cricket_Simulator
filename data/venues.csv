@@ -6,6 +6,7 @@ id,ground_name,capacity,quality,pace,turn,bounce,hardness,grass_cover
 5,Oval,25500,4,7,5,6,7,7
 6,Wankhede,32000,4,6,6,5,6,5
 7,Gabba,42000,5,9,2,8,9,6
+7,Edgbaston,42000,5,9,2,8,9,6
 8,Newlands,25000,5,8,3,7,8,7
 9,Trent,17500,4,7,4,6,7,8
 10,WACA,24000,4,9,2,9,9,6
@@ -49,3 +50,8 @@ id,ground_name,capacity,quality,pace,turn,bounce,hardness,grass_cover
 48,Providence,15000,3,6,5,6,6,5
 49,Dubai,25000,4,6,6,6,6,5
 50,Tauranga,10000,3,8,3,7,8,7
+51,Ekana,50000,3,5,7,6,6,5
+52,Jaipur,16000,3,5,7,5,6,4
+53,Mohali,25000,4,6,6,6,6,5
+54,Dehli,40000,5,7,7,6,7,6
+53,Hyderabad,25000,4,6,6,6,6,5

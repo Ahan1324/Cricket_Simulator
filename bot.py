@@ -11,7 +11,7 @@ import random
 
 # Load data from CSV files
 players = read_cricketers('data/players.csv')
-teams = read_teams('data/teams.csv', players)
+teams = read_teams('data/hundredteams.csv', players)
 grounds = read_grounds('data/venues.csv')
 
 
@@ -213,9 +213,10 @@ async def simulate_test_innings(ctx, batting_team: Team, bowling_team: Team, ven
             run, out, comments, pace = simulate_ball_test(striker, bowler, venue, settled_meters[striker.name], over, aggression)
             if out: 
                 await ctx.send(f"{over}.{ball+1} {bowler.name} to {striker.name} | {round(pace,1)} kmph | OUT! | {random.choice(comments)} | {score}/{wickets}")
-            elif run > 3:
+            else: 
                 await ctx.send(f"{over}.{ball+1} {bowler.name} to {striker.name} | {round(pace,1)} kmph | {run} Runs |  {random.choice(comments)} |{score}/{wickets}")
             striker.match_fatigue += 40/bowler.fitness
+            asyncio.sleep(0.2)
             if run < 4: 
                 striker.match_fatigue += run * 20/bowler.fitness
                 non_striker.match_fatigue += run * 20/bowler.fitness
@@ -376,6 +377,147 @@ async def display_scorecard_discord(ctx, team_name, batting_stats, bowling_stats
     await ctx.send(bowling_card)
 
 
+async def simulate_100_innings(ctx, batting_team: Team, bowling_team: Team, venue, target=None):
+    score = 0
+    wickets = 0
+    bowled_overs = {}
+    batsman_index = 2
+    gamewon = False
+    bowler = None
+    
+    batting_stats = {player.name: {"runs": 0, "balls": 0, "out": False} for player in batting_team.players}
+    bowling_stats = {player.name: {"overs": 0, "manameens": 0, "runs": 0, "wickets": 0} for player in bowling_team.players}
+    settled_meters = {player.name: 0 for player in batting_team.players}
+
+    striker = batting_team.players[0]
+    non_striker = batting_team.players[1]
+    
+    for over in range(20):
+        if wickets >= 10 or gamewon:
+            break
+
+
+        bowler = select_bowler_t20(bowling_team, bowled_overs, over, bowler, bowling_stats)
+        #print(f"\nOver {over + 1}: {bowler.name} bowling")
+        message = ""
+        over_runs, over_wickets = 0, 0
+        
+        for ball in range(5):
+            if wickets >= 10 or gamewon:
+                break
+
+            batting_stats[striker.name]["balls"] += 1
+            aggression = calculate_aggression_t20(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets, score)
+            run, out, comments, pace = simulate_ball_t20(striker, bowler, venue, settled_meters[striker.name], over, aggression)
+            #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
+            striker.match_fatigue += 50/striker.fitness
+            if run < 4: 
+                striker.match_fatigue += run * 60/striker.fitness
+                non_striker.match_fatigue += run * 60/non_striker.fitness
+            else: 
+                striker.match_fatigue += 80/striker.fitness
+                non_striker.match_fatigue += 50/non_striker.fitness
+            
+            if out: 
+                await ctx.send(f"{over * 5 + ball} {bowler.name} to {striker.name} | {round(pace,1)} kmph | OUT! | {random.choice(comments)} | {score}/{wickets}")
+            else:
+                await ctx.send(f"{over * 5 + ball} {bowler.name} to {striker.name} | {round(pace,1)} kmph | {run} Runs |  {random.choice(comments)} |{score}/{wickets}")
+         
+
+            if out:
+                wickets += 1
+                batting_stats[striker.name]["out"] = True
+                bowling_stats[bowler.name]["wickets"] += 1
+                if batsman_index < len(batting_team.players):
+                    striker = batting_team.players[batsman_index]
+                    settled_meters[striker.name] = 0
+                    batsman_index += 1
+            else:
+                score += run
+                batting_stats[striker.name]["runs"] += run
+                if target and score > target:
+                    gamewon = True
+                if settled_meters[striker.name] < 50:
+                    settled_meters[striker.name] += run*0.8 + 0.3
+                if run % 2 == 1:
+                    striker, non_striker = non_striker, striker
+            
+            over_runs += run
+            await asyncio.sleep(0.1)
+            
+        striker, non_striker = non_striker, striker
+        bowling_stats[bowler.name]["overs"] += 1
+        bowling_stats[bowler.name]["runs"] += over_runs
+
+        await ctx.send(f"End of Over {over + 1} | Score {score}/{wickets} | {striker.name}:{batting_stats[striker.name]["runs"]}* of {batting_stats[striker.name]["balls"]} | {non_striker.name}:{batting_stats[non_striker.name]["runs"]} of {batting_stats[non_striker.name]["balls"]} | {bowler.name} :  {bowling_stats[bowler.name]["overs"]}-{bowling_stats[bowler.name]["runs"]}-{bowling_stats[bowler.name]["wickets"]}")
+        bowled_overs[bowler.name] = bowled_overs.get(bowler.name, 0) + 1
+    
+    return score, wickets, batting_stats, bowling_stats
+
+
+import openpyxl
+import os
+
+def update_spreadsheet(file_name, batting_stats, bowling_stats):
+    if not os.path.exists(file_name):
+        wb = openpyxl.Workbook()
+        ws1 = wb.active
+        ws1.title = "Batting Stats"
+        ws1.append(["Player", "Runs", "Balls", "Out"])
+
+        ws2 = wb.create_sheet("Bowling Stats")
+        ws2.append(["Player", "Overs", "Runs Conceded", "Wickets"])
+        wb.save(file_name)
+
+    wb = openpyxl.load_workbook(file_name)
+    
+    ws1 = wb["Batting Stats"]
+    ws2 = wb["Bowling Stats"]
+
+    # Update Batting Stats
+    for player, stats in batting_stats.items():
+        ws1.append([player, stats["runs"], stats["balls"], stats["out"]])
+
+    # Update Bowling Stats
+    for player, stats in bowling_stats.items():
+        ws2.append([player, stats["overs"], stats["runs"], stats["wickets"]])
+
+    wb.save(file_name)
+    wb.close()
+
+# Modify your simulate_100 function to call this after each match
+async def simulate_100(ctx, team1, team2, venue, file_name="player_stats_hundred.xlsx"):
+    if random.randint(1, 100) > 50:
+        team1, team2 = team2, team1
+    
+    pitch = venue
+    
+    # Simulate first innings
+    team1_score, team1_wickets, team1_batting_stats, team1_bowling_stats = await simulate_100_innings(ctx, team1, team2, pitch)
+    
+    # Display scorecard for team 1
+    await display_scorecard_discord(ctx, team1.name, team1_batting_stats, team1_bowling_stats)
+    
+    # Simulate second innings
+    team2_score, team2_wickets, team2_batting_stats, team2_bowling_stats = await simulate_100_innings(ctx, team2, team1, pitch, team1_score)
+
+    # Display scorecard for team 2
+    await display_scorecard_discord(ctx, team2.name, team2_batting_stats, team2_bowling_stats)
+
+    # Determine winner
+    if team1_score > team2_score:
+        await ctx.send(f"\n{team1.name} wins by {team1_score - team2_score} runs!")
+    elif team2_score > team1_score:
+        await ctx.send(f"\n{team2.name} wins by {10 - team2_wickets} wickets!")
+    else:
+        await ctx.send("\nMatch tied!")
+
+    # Update spreadsheet
+    update_spreadsheet(file_name, team1_batting_stats, team1_bowling_stats)
+    update_spreadsheet(file_name, team2_batting_stats, team2_bowling_stats)
+    
+    return (team1_score, team1_wickets, team2_score, team2_wickets)
+
 
 async def simulate_t20_innings(ctx, batting_team: Team, bowling_team: Team, venue, target=None):
     score = 0
@@ -407,14 +549,23 @@ async def simulate_t20_innings(ctx, batting_team: Team, bowling_team: Team, venu
                 break
 
             batting_stats[striker.name]["balls"] += 1
-            aggression = calculate_aggression_odi(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name])
+            aggression = calculate_aggression_t20(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets, score)
             run, out, comments, pace = simulate_ball_t20(striker, bowler, venue, settled_meters[striker.name], over, aggression)
-            striker.match_fatigue += 20/bowler.fitness
+            #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
+            striker.match_fatigue += 50/striker.fitness
             if run < 4: 
-                striker.match_fatigue += run * 40/bowler.fitness
-                non_striker.match_fatigue += run * 40/bowler.fitness
+                striker.match_fatigue += run * 60/striker.fitness
+                non_striker.match_fatigue += run * 60/non_striker.fitness
+            else: 
+                striker.match_fatigue += 80/striker.fitness
+                non_striker.match_fatigue += 50/non_striker.fitness
             
-            
+            if out: 
+                await ctx.send(f"{over}.{ball+1} {bowler.name} to {striker.name} | {round(pace,1)} kmph | OUT! | {random.choice(comments)} | {score}/{wickets}")
+            else:
+                await ctx.send(f"{over}.{ball+1} {bowler.name} to {striker.name} | {round(pace,1)} kmph | {run} Runs |  {random.choice(comments)} |{score}/{wickets}")
+         
+
             if out:
                 wickets += 1
                 batting_stats[striker.name]["out"] = True
@@ -429,25 +580,21 @@ async def simulate_t20_innings(ctx, batting_team: Team, bowling_team: Team, venu
                 if target and score > target:
                     gamewon = True
                 if settled_meters[striker.name] < 50:
-                    settled_meters[striker.name] += -0.4 + run*0.8
+                    settled_meters[striker.name] += run*0.8 + 0.3
                 if run % 2 == 1:
                     striker, non_striker = non_striker, striker
             
             over_runs += run
-            if out: 
-                await ctx.send(f"{over}.{ball+1} {bowler.name} to {striker.name} | {round(pace,1)} kmph | OUT! | {random.choice(comments)} | {score}/{wickets}")
-            else:
-                await ctx.send(f"{over}.{ball+1} {bowler.name} to {striker.name} | {round(pace,1)} kmph | {run} Runs |  {random.choice(comments)} |{score}/{wickets}")
-         
+            await asyncio.sleep(0.1)
+            
         striker, non_striker = non_striker, striker
         bowling_stats[bowler.name]["overs"] += 1
         bowling_stats[bowler.name]["runs"] += over_runs
 
-        await ctx.send(f"End of Over {over} | Score {score}/{wickets} | {striker.name}:{batting_stats[striker.name]["runs"]}* of {batting_stats[striker.name]["balls"]} | {non_striker.name}:{batting_stats[non_striker.name]["runs"]} of {batting_stats[non_striker.name]["balls"]} | {bowler.name} :  {bowling_stats[bowler.name]["overs"]}-{bowling_stats[bowler.name]["runs"]}-{bowling_stats[bowler.name]["wickets"]}")
+        await ctx.send(f"End of Over {over + 1} | Score {score}/{wickets} | {striker.name}:{batting_stats[striker.name]["runs"]}* of {batting_stats[striker.name]["balls"]} | {non_striker.name}:{batting_stats[non_striker.name]["runs"]} of {batting_stats[non_striker.name]["balls"]} | {bowler.name} :  {bowling_stats[bowler.name]["overs"]}-{bowling_stats[bowler.name]["runs"]}-{bowling_stats[bowler.name]["wickets"]}")
         bowled_overs[bowler.name] = bowled_overs.get(bowler.name, 0) + 1
     
     return score, wickets, batting_stats, bowling_stats
-
 
 async def simulate_t20(ctx, team1, team2, venue):
     """Simulate a match between any two teams."""
@@ -492,8 +639,8 @@ async def play_match(ctx, team1name: str, team2name: str, venuename: str, format
     await ctx.send(f"Match Between {team1name} & {team2name}")
     players = read_cricketers("data/players.csv")
     grounds = read_grounds("data/venues.csv")
-    teams = read_teams("data/teams.csv", players)
-    teams = read_teams('data/teams.csv', players)
+    teams = read_teams("data/hundredteams.csv", players)
+    teams = read_teams('data/hundredteams.csv', players)
     print(f"Loaded teams: {[team.name for team in teams]}")
     print(f"Loaded grounds: {[ground.name for ground in grounds]}")
     # Find the requested teams
@@ -513,7 +660,7 @@ async def play_match(ctx, team1name: str, team2name: str, venuename: str, format
     if not ground:
         await ctx.send(f"Ground '{venuename}' not found!")
         return
-    if format.lower() not in ["test", "odi", "t20"]:
+    if format.lower() not in ["test", "odi", "t20", "100"]:
         await ctx.send("Invalname match format! Choose from: Test, ODI, T20.")
         return
 
@@ -532,6 +679,8 @@ async def play_match(ctx, team1name: str, team2name: str, venuename: str, format
         await simulate_test(ctx, team1, team2, ground)
     if format.lower() == "t20":
         await simulate_t20(ctx, team1, team2, ground)
+    elif format == "100": 
+        await simulate_100(ctx, team1,team2,ground)
 
 
 
@@ -692,7 +841,31 @@ async def simulate_odi_innings(ctx, batting_team: Team, bowling_team: Team, venu
     
     return score, wickets, batting_stats, bowling_stats
 
+import re
 
 
+# Regex patterns
+def extract_scorecard(content):
+    batting_match = re.search(r"(\w+ Batting.*?)\n(\w+ Bowling.*?)$", content, re.DOTALL)
+    return batting_match.group(0) if batting_match else None
 
-# Run the bot
+@bot.command()
+async def save_scorecards(ctx):
+    """Scans all threads in the current channel and saves scorecards to files."""
+    channel = ctx.channel
+    
+    if not isinstance(channel, discord.TextChannel):
+        await ctx.send("This command must be used in a text channel.")
+        return
+    
+    for thread in channel.threads:
+        async for message in thread.history(limit=100):  # Adjust limit as needed
+            scorecard = extract_scorecard(message.content)
+            if scorecard:
+                file_path = os.path.join(SCORECARD_DIR, f"{thread.name}.txt")
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(scorecard)
+                await ctx.send(f"Saved scorecard for {thread.name}.")
+
+
+bot.run() #PUT YOUR BOT TOKEN HERE

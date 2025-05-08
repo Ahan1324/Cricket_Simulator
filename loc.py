@@ -15,7 +15,7 @@ from scipy.optimize import minimize
 
 # Load data from CSV files
 players = read_cricketers('data/players.csv')
-teams = read_teams('data/teams.csv', players)
+teams = read_teams('data/hundredteams.csv', players)
 grounds = read_grounds('data/venues.csv')
 
 
@@ -203,8 +203,8 @@ def play_match(team1name: str, team2name: str, venuename: str, format: str):
     print(f"Match Between {team1name} & {team2name}")
     players = read_cricketers("data/players.csv")
     grounds = read_grounds("data/venues.csv")
-    teams = read_teams("data/teams.csv", players)
-    teams = read_teams('data/teams.csv', players)
+    teams = read_teams("data/hundredteams.csv", players)
+    teams = read_teams('data/hundredteams.csv', players)
     print(f"Loaded teams: {[team.name for team in teams]}")
     print(f"Loaded grounds: {[ground.name for ground in grounds]}")
     # Find the requested teams
@@ -224,7 +224,7 @@ def play_match(team1name: str, team2name: str, venuename: str, format: str):
     if not ground:
         print(f"Ground '{venuename}' not found!")
         return
-    if format.lower() not in ["test", "odi", "t20"]:
+    if format.lower() not in ["test", "odi", "t20","100"]:
         print("Invalname match format! Choose from: Test, ODI, T20.")
         return
 
@@ -238,9 +238,11 @@ def play_match(team1name: str, team2name: str, venuename: str, format: str):
 
     # Placeholder for match simulation logic
     # TODO: Implement the match simulation logic
-    print(team1.players)
-    print(team2.players)
+    for player in team1.players:
+        print(player.name)
     assert len(team1.players) == 11
+    for player in team2.players:
+        print(player.name)
     assert len(team2.players) == 11
     if format.upper() == "ODI": 
         return simulate_odi(team1, team2, ground)
@@ -248,8 +250,8 @@ def play_match(team1name: str, team2name: str, venuename: str, format: str):
         return simulate_test(team1,team2, ground)
     if format.upper() == "T20":
         return simulate_t20(team1,team2, ground)
-
-    
+    if format.upper() == "100":
+        return simulate_hundred(team1,team2, ground)
 
 def calculate_aggression_t20(over, pitch, target, striker, non_striker, settled_striker, settled_non_striker, wickets_in_hand, score):
     """
@@ -264,52 +266,74 @@ def calculate_aggression_t20(over, pitch, target, striker, non_striker, settled_
     - settled_striker (float): Striker's settled meter (0 to 100).
     - settled_non_striker (float): Non-striker's settled meter (0 to 100).
     - wickets_in_hand (int): Number of wickets remaining (1 to 10).
+    - score (int): Current score of the batting team.
 
     Returns:
     - float: Recommended aggression level (0.5 to 2.0+), per provided data.
     """
-    base_rpo = 9  # Standard T20 base RPO
-
-    # Phase-based adjustment
-    if over < 6:
-        base_rpo += -1 + math.log(over + 1, 2.7)      # Powerplay: aggressive start
+    # Base aggression level depends on match phase
+    if over < 6:  # Power play (0-6 overs)
+        base_aggression = 1.4
+    elif over < 10:  # Middle overs (6-15)
+        # Higher base aggression for middle overs
+        base_aggression = 1.1
     elif over < 15:
-        base_rpo += 1.4 * 3.5 ** ((over - 15) / 25)  # Middle overs: steady increase
-    else:
-        base_rpo += ((over - 15))**1.2            # Death overs: ramp up to ~14 RPO by over 19
-
-    # Settled striker adjustment (assuming 0-100 scale)
-    if settled_striker < 30:
-        base_rpo -= (40 - settled_striker) / 10
-
-    # Wicket adjustment
-    wickets_lost = 10 - wickets_in_hand
-    if over > 6:
-        base_rpo -= wickets_lost * 1.5  # Less harsh penalty
-    else:
-        base_rpo += (wickets_in_hand - 7 + over / 5)  # Encourage aggression early
-
-    # Target chasing adjustment
-    if target is not None:
-        rpo_needed = (target-score)/ (20 - over)  # Approximate required RPO
-        target_factor = 1 + (1 / (1 + math.exp(-0.5 * (rpo_needed - base_rpo))))
-        base_rpo *= target_factor
-
-
-    if over > 15:  
-        base_rpo += (over-15) ** 0.4
-    # Convert to aggression level
-    aggression = base_rpo / 7.5
-    minbyphase = 3
-    if over < 6: 
-        minbyphase = 1.8
-    if over < 15:
-        minbyphase = 2
-    else: 
-        base_rpo += wickets_in_hand - 4
-
+        base_aggression = 1.3
+    else:  # Death overs (15-20)
+        base_aggression = over/10
     
-    return min(max(0.5, aggression),minbyphase)  # Align with data’s minimum
+    # Calculate remaining overs
+    remaining_overs = 20 - over
+    
+    # Calculate settlement impact - more aggressive when settled
+    # Amplify the effect of being settled during middle overs
+    avg_settled = (settled_striker + settled_non_striker) / 2
+    if 6 <= over < 15:  # Middle overs
+        settled_factor = 1.0 + (avg_settled / 100) * 0.6  # Stronger impact in middle overs
+    else:
+        settled_factor = 1.0 + (avg_settled / 100) * 0.4
+    
+    # Wickets factor - more aggressive with more wickets in hand
+    # Scale based on remaining overs: later in the game, fewer wickets are needed
+    wickets_needed = min(remaining_overs / 4, 5)  # Rough estimate of wickets needed for remainder
+    wickets_surplus = max(0, wickets_in_hand - wickets_needed)
+    
+    # More aggressive with surplus wickets, especially in middle overs
+    if 6 <= over < 15:  # Middle overs
+        wicket_factor = 1.0 + (wickets_surplus / 5) * 0.5
+    else:
+        wicket_factor = 1.0 + (wickets_surplus / 5) * 0.3
+    
+    # Special case for chasing
+    if target is not None:
+        remaining_balls = max(1, 120 - int(over) * 6 - (over % 1) * 6)
+        required_run_rate = (target - score) / (remaining_balls / 6) 
+        current_run_rate = score / max(1, over)
+        
+        # Adjust aggression based on required run rate vs current run rate
+        if required_run_rate > current_run_rate + 3:  # Far behind
+            chase_factor = 1.5
+        elif required_run_rate > current_run_rate + 1:  # Moderately behind
+            chase_factor = 1.2
+        elif required_run_rate < current_run_rate - 2 and over < 15:  # Well ahead and not in death overs
+            chase_factor = 0.9  # Still somewhat aggressive
+        else:  # On track
+            chase_factor = 1.0
+    else:
+        # Batting first strategy
+        if over >= 15:  # Death overs batting first
+            chase_factor = 1.6
+        elif 6 <= over < 15 and wickets_in_hand >= 7 and avg_settled > 60:
+            # In middle overs with plenty of wickets and settled batsmen, be more aggressive
+            chase_factor = 1.4
+        else:
+            chase_factor = 1.0
+    
+    # Calculate final aggression level
+    aggression = base_aggression * wicket_factor * settled_factor * max(chase_factor,chase_factor ** 0.4)
+    
+    # Ensure the output is within the valid range
+    return min(2,max(0.5, aggression))
 
 def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_striker, settled_non_striker,wickets_in_hand, score):
     """
@@ -362,79 +386,7 @@ def calculate_aggression_odi(over, pitch, target, striker, non_striker, settled_
 
     return max(0.5,base_rpo/5)
 
-
-def simulate_test(team1, team2, venue):
-    """Simulate a Test match between two teams, including follow-ons."""
-
-    # Random toss to decide who bats first
-    if random.randint(1, 100) > 100:
-        team1, team2 = team2, team1
-
-    pitch = venue
-
-    # Simulate first innings of team1
-    team1_score1, team1_wickets1, team1_batting_stats1, team1_bowling_stats1 = simulate_test_innings(team1, team2, pitch)
-
-    # Display scorecard for team 1 (first innings)
-    display_scorecard(team1_batting_stats1, team1_bowling_stats1, team1.name, team1_score1, team1_wickets1, "1st Innings")
-
-    # Simulate first innings of team2
-    team2_score1, team2_wickets1, team2_batting_stats1, team2_bowling_stats1 = simulate_test_innings(team2, team1, pitch)
-
-    # Display scorecard for team 2 (first innings)
-    display_scorecard(team2_batting_stats1, team2_bowling_stats1, team2.name, team2_score1, team2_wickets1, "1st Innings")
-
-    # Follow-on logic
-    if team1_score1 - team2_score1 >= 200:
-        print(f"{team1.name} enforces the follow-on on {team2.name}!")
-        # Team2 bats their second innings (follow-on)
-        team2_score2, team2_wickets2, team2_batting_stats2, team2_bowling_stats2 = simulate_test_innings(team2, team1, pitch)
-        display_scorecard_discord(team2.name, team2_batting_stats2, team2_bowling_stats2)
-
-        # Team1 bats in their second innings, chasing a target:
-        # Target = (team2 first + team2 second) - team1 first + 1
-        target = team2_score1 + team2_score2 - team1_score1 + 1
-        print(f"{team1.name} needs {target} runs to win in the final innings!")
-        team1_score2, team1_wickets2, team1_batting_stats2, team1_bowling_stats2 = simulate_test_innings(team1, team2, pitch, target=target)
-        display_scorecard_discord(team1.name, team1_batting_stats2, team1_bowling_stats2)
-
-        # Decide result based on the final innings
-        if team1_score2 >= target:
-            wickets_remaining = 10 - team1_wickets2
-            print(f"{team1.name} wins by {wickets_remaining} wickets!")
-            return{team1.name}
-        else:
-            runs_short = target - team1_score2
-            print(f"{team2.name} wins by {runs_short} runs!")
-            return{team2.name}
-    else:
-        # No follow-on: team1 bats their second innings
-        team1_score2, team1_wickets2, team1_batting_stats2, team1_bowling_stats2 =  simulate_test_innings(team1, team2, pitch)
-        display_scorecard_discord(team1.name, team1_batting_stats2, team1_bowling_stats2)
-
-        # Team2 chases in their second innings:
-        # Target = (team1 first + team1 second) - team2 first + 1
-        target = team1_score1 + team1_score2 - team2_score1 + 1
-        if target < 0: 
-            print(f"{team2.name} wins by an innings and {-target} runs")
-            return team2.name
-        print(f"{team2.name} needs {target} runs to win in the final innings!")
-        team2_score2, team2_wickets2, team2_batting_stats2, team2_bowling_stats2 = simulate_test_innings(team2, team1, pitch, target=target)
-        display_scorecard_discord(team2.name, team2_batting_stats2, team2_bowling_stats2)
-
-        # Decide result based on the final innings
-        if team2_score2 >= target:
-            wickets_remaining = 10 - team2_wickets2
-            print(f"{team2.name} wins by {wickets_remaining} wickets!")
-            return team2.name
-        else:
-            runs_short = target - team2_score2
-            print(f"{team1.name} wins by {runs_short} runs!")
-            return team1.name
-
-
-
-
+  
 def get_ball_probabilities_test(expected_runs):
     """
     Calculates a distribution of weights for runs (0, 1, 2, 3, 4, 6) 
@@ -509,282 +461,6 @@ def get_ball_probabilities(expected_runs):
 
     return [p0, p1, p2, p3, p4, 0, p6]
 
-def simulate_ball_test(striker, bowler, pitch, settled_meter, over, aggression):
-    """
-    Simulate a single ball in an ODI match.
-
-    Parameters:
-    - striker (Player): The batter facing the ball.
-    - bowler (Player): The player bowling the ball.
-    - pitch (Stadium): The pitch conditions.
-    - settled_meter (float): How settled the batter is (currently unused).
-    - over (int): Current over number (currently unused).
-
-    Returns:
-    - runs (int): Number of runs scored on this ball (0, 1, 2, 4, or 6).
-    - out (bool): Whether the batter is out on this ball.
-    - comments (list): a list of strings containing relevant lines of commentary
-    - pace (float): speed of the ball
-    """
-    # Calculate base runs and out probabilities from striker's ODI stats
-    base_runs = striker.test_sr / 100  # Expected runs per ball
-    base_out = base_runs/ striker.test_ave # Base probability of getting out
-    turn, swing, seam, bounce, slower = 0, 0, 0, 0, False
-    comments = []
-
-    # Calculate ball attributes based on bowler type and pitch conditions
-    if bowler.bowling_type == "Pace":
-        # Pace bowler: calculate pace, swing, bounce, and accuracy
-        if random.randint(1, 100) < 95:
-            # 15% chance of bowling faster
-            pace = bowler.bowling_pace - random.gauss(bowler.match_fatigue/10, 5)
-            difficulty = max(0,(pace - 130))**1.23 # -5/30
-            pd = difficulty
-            slower = False
-        else:
-            # 85% chance of bowling slower with variation
-            pace = bowler.bowling_pace * 0.83 + random.gauss(2, 8)
-            difficulty = (bowler.bowling_pace - pace)/3
-            pd = difficulty
-            slower = True 
-            #print("s", end = '')
-        
-        #print(bowler.name, pace, difficulty)
-        # Swing and bounce influenced by pitch grass cover and bounce
-        swing = ((bowler.bowling_swing -50)**2 * (pitch.grass_cover))/(50 + (over%80) * 20)* random.gauss(1, 0.2)
-        difficulty += max(swing, 0.8)
-        bounce = ((bowler.bowling_bounce - 50) + (pitch.bounce)) * random.gauss(1, 0.4) * 0.1
-        seam = (((bowler.bowling_seam - 50) * (pitch.hardness))/40) ** random.gauss(0, 0.9)
-        # Accuracy based on bowler's control
-        difficulty += bounce + seam
-        #difficulty = max(random.gauss(difficulty,100-bowler.control),difficulty)
-
-        # Calculate difficulty of the ball for the batter
-        # Higher pace, swing, bounce, and accuracy increase difficulty
-        # Batter's bonuses (batting_fast, batting_swing, batting_bounce) reduce difficulty
-        #print(f"Bowler: {bowler.name} Pace:{pd} swing:{swing} Bounce:{bounce} Seam:{seam} difficulty: {difficulty}")
-        batter_bonus = ((striker.batting_fast-50) * (pace-130))/40 #
-        batter_bonus += ((striker.batting_swing-50) * swing)/20
-        batter_bonus += ((striker.batting_bounce-50) * bounce)/30  #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
-    else:
-        # Spin bowler: calculate pace (slower), turn, bounce, and accuracy
-        pace = bowler.bowling_pace + random.gauss(10, 5)  # Spin pace typically between 60-80 kmph
-        turn = max(bowler.bowling_turn * ((pitch.turn)/5)**1.5 * random.gauss(3, 2), 0.2)/100
-        difficulty = (turn**1.1)*6.5
-        #difficulty = max(random.gauss(difficulty,100-bowler.bowling_control),difficulty)
-
-        batter_bonus = (striker.batting_spin-50)
-        #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
-    difficulty *= (random.gauss(bowler.bowling_control, 5)/100)
-    batter_bonus += 4*(settled_meter**0.05)
-
-    #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
-    if bowler.match_fatigue > 20:
-        bowlfmod = (bowler.match_fatigue-20)/60 #0 to 2+ 
-        bowlfmod = max(0,min(bowlfmod,2))
-    else: 
-        bowlfmod = (20-bowler.match_fatigue)/30 # 1 to 0
-        bowlfmod = min(max(bowlfmod,0.1),1)
-
-    if striker.match_fatigue > 20:
-        batfmod = (striker.match_fatigue-20)/80 #0 to 2+ 
-        batfmod = max(0,min(batfmod,2))
-    else: 
-        batfmod = (20-striker.match_fatigue)/40 # 1 to 0
-        batfmod = min(max(batfmod,0.1),0)
-
-    #print(batfmod, bowlfmod)
-    fatigue_effect = ((batfmod - bowlfmod + 3)/3) #  1.4 to 0.6
-
-    if bowler.match_fatigue > 20:
-        bowlfmod = (bowler.match_fatigue-20)/60 #0 to 2+ 
-        bowlfmod = max(0,min(bowlfmod,2))
-    else: 
-        bowlfmod = (20-bowler.match_fatigue)/30 # 1 to 0
-        bowlfmod = min(max(bowlfmod,0.1),1)
-
-    if striker.match_fatigue > 20:
-        batfmod = (striker.match_fatigue-20)/80 #0 to 2+ 
-        batfmod = max(0,min(batfmod,2))
-    else: 
-        batfmod = (20-striker.match_fatigue)/40 # 1 to 0
-        batfmod = min(max(batfmod,0.1),0)
-
-
-
-    fatigue_effect = ((batfmod - bowlfmod + 3)/3)**0.2 #  1.4 to 0.6
-
-    # Scale factor for difficulty (may need tuning based on testing)
-    shot = batter_bonus - (difficulty)
-    
-    # Calculate probability of getting out
-    # Higher difficulty increases the chance of getting out
-
-    p_out = base_out/fatigue_effect * (0.8 - (shot)/50)
-    # Determine if the batter is out
-    if random.random() < p_out:
-        if pace > 145: 
-            comments.extend(commentary["very_fast_ball"])
-        if swing > 20: 
-            comments.extend(commentary["swinging_ball"])
-        if slower:
-            comments.extend(commentary["slower_ball"])
-        if seam > 10: 
-            comments.extend(commentary["seaming_ball"])
-        if bounce > 10: 
-            comments.extend(commentary["high_bouncer"])
-        if turn > 3: 
-            comments.extend(commentary["spinning_ball"])
-        if difficulty < 8: 
-            if bowler.bowling_type == "Pacer":
-                comments.extend(commentary["bad_ball_pacer"])
-            else:
-                comments.extend(commentary["bad_ball_spinner"])
-
-        if len(comments) == 0: 
-            comments.extend(generic_commentary["W"])
-
-        return 0, True, comments, pace
-
-
-
-    runs = base_runs * (1 + shot/100) 
-
-
-    w = get_ball_probabilities(runs)
-    r =  random.choices([0,1,2,3,4,5,6], weights=w)[0]
-
-
-    if r == 0: 
-        if pace > 150: 
-            comments.extend(dot_ball_commentary["very_fast_ball"])
-        if swing > 22: 
-            comments.extend(dot_ball_commentary["swinging_ball"])
-        if slower:
-            comments.extend(dot_ball_commentary["slower_ball"])
-        if seam > 12: 
-            comments.extend(dot_ball_commentary["seaming_ball"])
-        if bounce > 7: 
-            comments.extend(dot_ball_commentary["high_bouncer"])
-        if turn > 10: 
-            comments.extend(dot_ball_commentary["spinning_ball"])
-        if difficulty < 8:
-            if bowler.bowling_type == "Pacer":
-                comments.extend(dot_ball_commentary["bad_ball_pacer"])
-            else:
-                comments.extend(dot_ball_commentary["bad_ball_spinner"])
-
-    
-    if r == 1: 
-        if pace > 147: 
-            comments.extend(single_commentary["very_fast_ball"])
-        if swing > 22: 
-            comments.extend(single_commentary["swinging_ball"])
-        if slower:
-            comments.extend(single_commentary["slower_ball"])
-        if seam > 12: 
-            comments.extend(single_commentary["seaming_ball"])
-        if bounce > 7: 
-            comments.extend(single_commentary["high_bouncer"])
-        if turn > 10: 
-            comments.extend(single_commentary["spinning_ball"])
-        if difficulty < 8:
-            if bowler.bowling_type == "Pacer":
-                comments.extend(single_commentary["bad_ball_pacer"])
-            else:
-                comments.extend(single_commentary["bad_ball_spinner"])
-
-    if r == 2: 
-        if pace > 147: 
-            comments.extend(two_commentary["very_fast_ball"])
-        if swing > 22: 
-            comments.extend(two_commentary["swinging_ball"])
-        if slower:
-            comments.extend(two_commentary["slower_ball"])
-        if seam > 12: 
-            comments.extend(two_commentary["seaming_ball"])
-        if bounce > 7: 
-            comments.extend(two_commentary["high_bouncer"])
-        if turn > 10: 
-            comments.extend(two_commentary["spinning_ball"])
-        if difficulty < 8:
-            if bowler.bowling_type == "Pacer":
-                comments.extend(two_commentary["bad_ball_pacer"])
-            else:
-                comments.extend(two_commentary["bad_ball_spinner"])
-
-    if r == 3:
-        if pace > 147: 
-            comments.extend(three_commentary["very_fast_ball"])
-        if swing > 22: 
-            comments.extend(three_commentary["swinging_ball"])
-        if slower:
-            comments.extend(three_commentary["slower_ball"])
-        if seam > 12: 
-            comments.extend(three_commentary["seaming_ball"])
-        if bounce > 7: 
-            comments.extend(three_commentary["high_bouncer"])
-        if turn > 10: 
-            comments.extend(three_commentary["spinning_ball"])
-        if difficulty < 8:
-            if bowler.bowling_type == "Pacer":
-                comments.extend(three_commentary["bad_ball_pacer"])
-            else:
-                comments.extend(three_commentary["bad_ball_spinner"])
-
-    if r == 4: 
-        if pace > 147: 
-            comments.extend(four_commentary["very_fast_ball"])
-        if swing > 22: 
-            comments.extend(four_commentary["swinging_ball"])
-        if slower:
-            comments.extend(four_commentary["slower_ball"])
-        if seam > 12: 
-            comments.extend(four_commentary["seaming_ball"])
-        if bounce > 7: 
-            comments.extend(four_commentary["high_bouncer"])
-        if turn > 10: 
-            comments.extend(four_commentary["spinning_ball"])
-        if difficulty < 8:
-            if bowler.bowling_type == "Pacer":
-                comments.extend(four_commentary["bad_ball_pacer"])
-            else:
-                comments.extend(four_commentary["bad_ball_spinner"])
-
-    if r == 6:
-        if pace > 147: 
-            comments.extend(six_commentary["very_fast_ball"])
-        if swing > 22: 
-            comments.extend(six_commentary["swinging_ball"])
-        if slower:
-            comments.extend(six_commentary["slower_ball"])
-        if seam > 12: 
-            comments.extend(six_commentary["seaming_ball"])
-        if bounce > 7: 
-            comments.extend(six_commentary["high_bouncer"])
-        if turn > 10: 
-            comments.extend(six_commentary["spinning_ball"])
-        if difficulty < 8:
-            if bowler.bowling_type == "Pacer":
-                comments.extend(six_commentary["bad_ball_pacer"])
-            else:
-                comments.extend(six_commentary["bad_ball_spinner"])
-
-    if len(comments) == 0: 
-        if r == 0:
-            comments.extend(generic_commentary["."])
-        elif r == 1: 
-            comments.extend(generic_commentary["1"])
-        elif r == 2: 
-            comments.extend(generic_commentary["2"])
-        elif r == 3: 
-            comments.extend(generic_commentary["3"])
-        elif r == 4: 
-            comments.extend(generic_commentary["4"])
-        elif r == 6: 
-            comments.extend(generic_commentary["6"])
-    return r, False, comments, pace
-
 
 def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
     """
@@ -841,17 +517,17 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
         # Batter's bonuses (batting_fast, batting_swing, batting_bounce) reduce difficulty
         #print(f"Bowler: {bowler.name} Pace:{pd} swing:{swing} Bounce:{bounce} Seam:{seam} difficulty: {difficulty}")
         batter_bonus = ((striker.batting_fast-50) * (pace-130))/25 #
-        batter_bonus += ((striker.batting_swing-50) * swing)/10
-        batter_bonus += ((striker.batting_bounce-50) * bounce)/140
+        batter_bonus += ((striker.batting_swing-50) * swing)/30
+        batter_bonus += ((striker.batting_bounce-50) * bounce)/100
         #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
     else:
         # Spin bowler: calculate pace (slower), turn, bounce, and accuracy
         pace = bowler.bowling_pace + random.gauss(10, 5)  # Spin pace typically between 60-80 kmph
-        turn = max(bowler.bowling_turn * ((pitch.turn)/5)**1.5 * random.gauss(3, 2), 0.2)/100
-        difficulty = (turn**1.1)*4
+        turn = max(bowler.bowling_turn * ((pitch.turn)/5)**1.5 * random.gauss(3, 2), 0.2)/50
+        difficulty = (turn**1.2)*7
         #difficulty = max(random.gauss(difficulty,100-bowler.bowling_control),difficulty)
 
-        batter_bonus = (striker.batting_spin-50)
+        batter_bonus = (striker.batting_spin-50)/3
         #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
 
     batter_bonus += 3*(settled_meter**0.15)
@@ -884,7 +560,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
     #print(shot)
     #print(f"{difficulty} Shot:{shot} Swing{swing}")
     aggression = aggression
-    p_out = min(3*base_out*aggression, base_out * (0.6 - (shot)/80) * (aggression ** 0.8)) 
+    p_out = 2*base_out*aggression, base_out * (0.4 - (shot)/60) * (aggression ** 0.7)
 
     # Determine if the batter is out
     if random.random() < p_out:
@@ -900,7 +576,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(commentary["high_bouncer"])
         if turn > 3: 
             comments.extend(commentary["spinning_ball"])
-        if difficulty < 8: 
+        if difficulty < -10: 
             if bowler.bowling_type == "Pacer":
                 comments.extend(commentary["bad_ball_pacer"])
             else:
@@ -911,16 +587,10 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
 
         return 0, True, comments, pace
 
-    runs = (base_runs)**2 * (1 + shot/80)*fatigue_effect * max(aggression, aggression ** 1.2)
+    runs = (base_runs+0.2)**2 * (1.7 + shot/40)*fatigue_effect * max(aggression, aggression ** 1.3)
     w = get_ball_probabilities(runs)
     r =  random.choices([0,1,2,3,4,5,6], weights=w)[0]
 
-    if r == 0: 
-        if random.randint(1,100) > (striker.batting_rotation - 50):
-            r = 1
-    if r == 1:
-        if random.randint(1,100) < (striker.batting_rotation - 50):
-            r = 0
 
     if r == 0: 
         if pace > 150: 
@@ -935,7 +605,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(dot_ball_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(dot_ball_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(dot_ball_commentary["bad_ball_pacer"])
             else:
@@ -955,7 +625,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(single_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(single_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(single_commentary["bad_ball_pacer"])
             else:
@@ -974,7 +644,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(two_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(two_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(two_commentary["bad_ball_pacer"])
             else:
@@ -993,7 +663,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(three_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(three_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(three_commentary["bad_ball_pacer"])
             else:
@@ -1012,7 +682,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(four_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(four_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(four_commentary["bad_ball_pacer"])
             else:
@@ -1031,7 +701,7 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(six_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(six_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(six_commentary["bad_ball_pacer"])
             else:
@@ -1053,7 +723,8 @@ def simulate_ball_odi(striker, bowler, pitch, settled_meter, over, aggression):
     return r, False, comments, pace
 
 
-def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
+
+def simulate_ball_test(striker, bowler, pitch, settled_meter, over, aggression):
     """
     Simulate a single ball in an ODI match.
 
@@ -1071,58 +742,56 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
     - pace (float): speed of the ball
     """
     # Calculate base runs and out probabilities from striker's ODI stats
-    base_runs = (striker.t20_sr)/ 100  # Expected runs per ball
-    base_out = base_runs/striker.t20_ave  # Base probability of getting out
+    base_runs = ((striker.test_sr)/ 100 + striker.test_ave/150)  # Expected runs per ball
+    print(striker.name)
+    base_out =  (base_runs/(striker.test_ave ** 1.4))# Base probability of getting out
     turn, swing, seam, bounce, slower = 0, 0, 0, 0, False
     comments = []
 
-    # Calculate ball attributes based on bowler type and pitch conditions
-    if bowler.bowling_type == "Pace":
-        # Pace bowler: calculate pace, swing, bounce, and accuracy
-        if random.randint(1, 100) < 87:
-            # 15% chance of bowling faster
-            pace = bowler.bowling_pace + random.gauss(0, 5)
-            difficulty = max(0,(pace - 130))**1.15 # -5/30
-            pd = difficulty
-            slower = False
-        else:
-            # 85% chance of bowling slower with variation
+    if bowler.bowling_type == "Pace": 
+        if random.randint(1, 100) < 94:
+            pace = random.gauss(bowler.bowling_pace + pitch.bounce*2 - 14, 5)
+            pd = max(0,pace-126) * (1 - striker.batting_fast/100) #10-15 before skill reduction
+            swing = ((bowler.bowling_swing - 50) * (pitch.grass_cover))/(10 + (over%80) * 3) # approx 10 in first over before skill reduction
+            sd = swing * (1 - striker.batting_swing/100)
+            bounce = max(0,(random.gauss(bowler.bowling_bounce * pitch.bounce/6,10) - 70)/2)
+            bd = bounce * (1 - striker.batting_bounce/100)
+            seam = (((bowler.bowling_seam) * (pitch.hardness))/40) ** random.gauss(-0.4, 0.9)
+            difficulty = seam + bd + sd + pd
+            #print(f"Bowler: {bowler.name} difficulty: {difficulty} seam = {round(seam,2)} bd = {round(bd,2)} sd = {round(sd,2)} pd = {round(pd,2)} pace = {int(pace)}")
+        else: 
             pace = bowler.bowling_pace * 0.83 + random.gauss(2, 8)
-            difficulty = (bowler.bowling_pace - pace)/3
-            pd = difficulty
-            slower = True 
-            #print("s", end = '')
-        
-        #print(bowler.name, pace, difficulty)
-        # Swing and bounce influenced by pitch grass cover and bounce
-        swing = ((bowler.bowling_swing - 50)**2 * (pitch.grass_cover))/(50 + over * 70)* random.gauss(1, 0.2)
-        difficulty *= max(swing, 0.8)
-        bounce = ((bowler.bowling_bounce)/10 + (pitch.bounce)) * random.gauss(1, 0.4)
-        seam = (((bowler.bowling_seam) * (pitch.hardness))/40) ** random.gauss(-0.2, 0.9)
-        # Accuracy based on bowler's control
-        difficulty += bounce + seam
-        #difficulty = max(random.gauss(difficulty,100-bowler.control),difficulty)
+            pd = (bowler.bowling_variations + random.gauss(0,10) - 50)/10
+            bounce = max(0,(random.gauss(bowler.bowling_bounce * pitch.bounce/5,10) - 70)/4)
+            difficulty = pd + bounce
+    elif bowler.bowling_type == "Finger":
+        # Spin bowler: calculate pace (slower), turn, bounce, and accuracy
+        pace = bowler.bowling_pace + random.gauss(10, 5)  # Spin pace typically between 60-80 kmph
+        turn = max(bowler.bowling_turn * ((pitch.turn)/5)**1.5 * random.gauss(3, 2), 0.2)/10
+        if random.randint(0, int(bowler.bowling_variations)) > random.gauss(75,10):
+            variation = 0
+        else: 
+            variation = min(0, max(15, bowler.bowling_variations * 0.15 + random.uniform(-3, 3) * (1 - bowler.bowling_variations/100) - striker.batting_spin * 0.05))
 
-        # Calculate difficulty of the ball for the batter
-        # Higher pace, swing, bounce, and accuracy increase difficulty
-        # Batter's bonuses (batting_fast, batting_swing, batting_bounce) reduce difficulty
-        #print(f"Bowler: {bowler.name} Pace:{pd} swing:{swing} Bounce:{bounce} Seam:{seam} difficulty: {difficulty}")
-        batter_bonus = (striker.batting_fast * (pace-130))/25
-        batter_bonus += (striker.batting_swing * swing)/10
-        batter_bonus += (striker.batting_bounce * bounce)/140
+        difficulty =  turn * (100-striker.batting_spin)/140 + variation**0.5
+        #difficulty = max(random.gauss(difficulty,100-bowler.bowling_control),difficulty)
         #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
     else:
         # Spin bowler: calculate pace (slower), turn, bounce, and accuracy
         pace = bowler.bowling_pace + random.gauss(10, 5)  # Spin pace typically between 60-80 kmph
-        turn = max(bowler.bowling_turn * ((pitch.turn)/5)**1.5 * random.gauss(3, 2), 0.2)/100
-        difficulty = (turn**1.1)*4
+        turn = max(bowler.bowling_turn * ((pitch.turn)/5) * random.gauss(3, 2), 0.2)/7
+        if random.randint(0, int(bowler.bowling_variations)) > random.gauss(80,10):
+            variation = 0
+        else: 
+            variation = min(0, max(15, bowler.bowling_variations * 0.15 + random.uniform(-3, 3) * (1 - bowler.bowling_variations/100) - striker.batting_spin * 0.05))
+
+        difficulty =  turn * (100-striker.batting_spin)/150 + variation**0.5
+
+
         #difficulty = max(random.gauss(difficulty,100-bowler.bowling_control),difficulty)
-
-        batter_bonus = striker.batting_spin/6
         #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
-    batter_bonus += 3.5*(settled_meter**0.2)
 
-    #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
+    
     if bowler.match_fatigue > 20:
         bowlfmod = (bowler.match_fatigue-20)/60 #0 to 2+ 
         bowlfmod = max(0,min(bowlfmod,2))
@@ -1143,28 +812,29 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
 
 
     # Scale factor for difficulty (may need tuning based on testing)
-    shot = batter_bonus - (difficulty)
+    shot = difficulty
     
+
     # Calculate probability of getting out
     # Higher difficulty increases the chance of getting out
-    p_out = min(2*base_out*aggression**2, base_out * (1 - (shot)/100) * (aggression ** 2))
-    if settled_meter < 20: 
-        p_out /= (striker.t20_ave/15)
+    p_out =  base_out * (1.5 + (difficulty)/5 - ((settled_meter + 20) ** 0.1)/100)
+    if striker.role == "Bowler":
+        p_out *= 5
     # Determine if the batter is out
     if random.random() < p_out:
         if pace > 145: 
             comments.extend(commentary["very_fast_ball"])
-        if swing > 20: 
+        if swing > 5: 
             comments.extend(commentary["swinging_ball"])
         if slower:
             comments.extend(commentary["slower_ball"])
-        if seam > 10: 
+        if seam > 5: 
             comments.extend(commentary["seaming_ball"])
-        if bounce > 10: 
+        if bounce > 5: 
             comments.extend(commentary["high_bouncer"])
-        if turn > 3: 
+        if turn > 2: 
             comments.extend(commentary["spinning_ball"])
-        if difficulty < 8: 
+        if difficulty < -10: 
             if bowler.bowling_type == "Pacer":
                 comments.extend(commentary["bad_ball_pacer"])
             else:
@@ -1175,31 +845,31 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
 
         return 0, True, comments, pace
 
-    runs = ((base_runs+0.1)**1.17+0.1) * (1.6+ shot/100)*fatigue_effect * (aggression+0.1) ** 1.5
+    runs = max(0.1,(1.3*(base_runs - difficulty/7) * ((settled_meter ** 0.1)/40)*fatigue_effect)) 
     w = get_ball_probabilities(runs)
     r =  random.choices([0,1,2,3,4,5,6], weights=w)[0]
 
     if r == 0: 
         if random.randint(1,100) > (striker.batting_rotation - 50):
             r = 1
-    if r == 1:
+    if r == 1: 
         if random.randint(1,100) < (striker.batting_rotation - 50):
             r = 0
 
     if r == 0: 
         if pace > 150: 
             comments.extend(dot_ball_commentary["very_fast_ball"])
-        if swing > 22: 
+        if swing > 8: 
             comments.extend(dot_ball_commentary["swinging_ball"])
         if slower:
             comments.extend(dot_ball_commentary["slower_ball"])
-        if seam > 12: 
+        if seam > 5: 
             comments.extend(dot_ball_commentary["seaming_ball"])
-        if bounce > 7: 
+        if bounce > 5: 
             comments.extend(dot_ball_commentary["high_bouncer"])
-        if turn > 10: 
+        if turn > 5: 
             comments.extend(dot_ball_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(dot_ball_commentary["bad_ball_pacer"])
             else:
@@ -1219,7 +889,7 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(single_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(single_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(single_commentary["bad_ball_pacer"])
             else:
@@ -1238,7 +908,7 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(two_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(two_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(two_commentary["bad_ball_pacer"])
             else:
@@ -1257,7 +927,7 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(three_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(three_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(three_commentary["bad_ball_pacer"])
             else:
@@ -1276,7 +946,7 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(four_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(four_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(four_commentary["bad_ball_pacer"])
             else:
@@ -1295,7 +965,268 @@ def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
             comments.extend(six_commentary["high_bouncer"])
         if turn > 10: 
             comments.extend(six_commentary["spinning_ball"])
-        if difficulty < 8:
+        if difficulty < -10:
+            if bowler.bowling_type == "Pacer":
+                comments.extend(six_commentary["bad_ball_pacer"])
+            else:
+                comments.extend(six_commentary["bad_ball_spinner"])
+
+    if len(comments) == 0: 
+        if r == 0:
+            comments.extend(generic_commentary["."])
+        elif r == 1: 
+            comments.extend(generic_commentary["1"])
+        elif r == 2: 
+            comments.extend(generic_commentary["2"])
+        elif r == 3: 
+            comments.extend(generic_commentary["3"])
+        elif r == 4: 
+            comments.extend(generic_commentary["4"])
+        elif r == 6: 
+            comments.extend(generic_commentary["6"])
+    return r, False, comments, pace
+
+
+
+def simulate_ball_t20(striker, bowler, pitch, settled_meter, over, aggression):
+    """
+    Simulate a single ball in an ODI match.
+
+    Parameters:
+    - striker (Player): The batter facing the ball.
+    - bowler (Player): The player bowling the ball.
+    - pitch (Stadium): The pitch conditions.
+    - settled_meter (float): How settled the batter is (currently unused).
+    - over (int): Current over number (currently unused).
+
+    Returns:
+    - runs (int): Number of runs scored on this ball (0, 1, 2, 4, or 6).
+    - out (bool): Whether the batter is out on this ball.
+    - comments (list): a list of strings containing relevant lines of commentary
+    - pace (float): speed of the ball
+    """
+    # Calculate base runs and out probabilities from striker's ODI stats
+    base_runs = ((striker.t20_sr)/ 100 ) ** 1.2 - 0.2 # Expected runs per ball
+    base_out = base_runs ** 0.2 * 0.7 /striker.t20_ave # Base probability of getting out
+    turn, swing, seam, bounce, slower = 0, 0, 0, 0, False
+    comments = []
+
+    if bowler.bowling_type == "Pace": 
+        if random.randint(1, 100) < 90 - over:
+            pace = random.gauss(bowler.bowling_pace + pitch.bounce*2 - 14, 5)
+            pd = max(0,pace-133) * (1 - striker.batting_fast/100) * 0.75 #10-15 before skill reduction
+            swing = ((bowler.bowling_swing - 50) * (pitch.grass_cover))/(15 + over * 8) # approx 10 in first over before skill reduction
+            sd = swing * (1 - striker.batting_swing/100)
+            bounce = max(0,(random.gauss(bowler.bowling_bounce * pitch.bounce/6,10) - 70)/2)
+            bd = bounce * (1 - striker.batting_bounce/100)
+            seam = (((bowler.bowling_seam) * (pitch.hardness))/40) ** random.gauss(-0.4, 0.9)
+            difficulty = seam + bd + sd + pd
+            #print(f"Bowler: {bowler.name} difficulty: {difficulty} seam = {round(seam,2)} bd = {round(bd,2)} sd = {round(sd,2)} pd = {round(pd,2)} pace = {int(pace)}")
+        else: 
+            pace = bowler.bowling_pace * 0.83 + random.gauss(2, 8)
+            pd = (bowler.bowling_variations + random.gauss(0,10) - 50)/10
+            bounce = max(0,(random.gauss(bowler.bowling_bounce * pitch.bounce/5,10) - 70)/4)
+            difficulty = pd + bounce
+    elif bowler.bowling_type == "Finger":
+        # Spin bowler: calculate pace (slower), turn, bounce, and accuracy
+        pace = bowler.bowling_pace + random.gauss(10, 5)  # Spin pace typically between 60-80 kmph
+        turn = max(bowler.bowling_turn * ((pitch.turn)/5)**1.5 * random.gauss(3, 2), 0.2)/10
+        if random.randint(0, int(bowler.bowling_variations)) > random.gauss(75,10):
+            variation = 0
+        else: 
+            variation = min(0, max(15, bowler.bowling_variations * 0.15 + random.uniform(-3, 3) * (1 - bowler.bowling_variations/100) - striker.batting_spin * 0.05))
+
+        difficulty =  turn * (100-striker.batting_spin)/140 + variation**0.5
+        #difficulty = max(random.gauss(difficulty,100-bowler.bowling_control),difficulty)
+        #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
+    else:
+        # Spin bowler: calculate pace (slower), turn, bounce, and accuracy
+        pace = bowler.bowling_pace + random.gauss(10, 5)  # Spin pace typically between 60-80 kmph
+        turn = max(bowler.bowling_turn * ((pitch.turn)/5) * random.gauss(3, 2), 0.2)/7
+        if random.randint(0, int(bowler.bowling_variations)) > random.gauss(80,10):
+            variation = 0
+        else: 
+            variation = min(0, max(15, bowler.bowling_variations * 0.15 + random.uniform(-3, 3) * (1 - bowler.bowling_variations/100) - striker.batting_spin * 0.05))
+
+        difficulty =  turn * (100-striker.batting_spin)/128 + variation**0.5
+
+
+        #difficulty = max(random.gauss(difficulty,100-bowler.bowling_control),difficulty)
+        #print(f"Bowler: {bowler.name} difficulty: {difficulty} batter {batter_bonus}")
+
+    
+    if bowler.match_fatigue > 20:
+        bowlfmod = (bowler.match_fatigue-20)/60 #0 to 2+ 
+        bowlfmod = max(0,min(bowlfmod,2))
+    else: 
+        bowlfmod = (20-bowler.match_fatigue)/30 # 1 to 0
+        bowlfmod = min(max(bowlfmod,0.1),1)
+
+    if striker.match_fatigue > 20:
+        batfmod = (striker.match_fatigue-20)/80 #0 to 2+ 
+        batfmod = max(0,min(batfmod,2))
+    else: 
+        batfmod = (20-striker.match_fatigue)/40 # 1 to 0
+        batfmod = min(max(batfmod,0.1),0)
+
+
+
+    fatigue_effect = ((batfmod - bowlfmod + 3)/3)**0.2 #  1.4 to 0.6
+
+
+    # Scale factor for difficulty (may need tuning based on testing)
+    shot = difficulty
+    
+
+    # Calculate probability of getting out
+    # Higher difficulty increases the chance of getting out
+    p_out =  base_out * aggression ** 0.7  * (0.6 + (difficulty)/10 - ((settled_meter + 25) ** 0.13)/80)
+    # Determine if the batter is out
+    if random.random() < p_out:
+        if pace > 145: 
+            comments.extend(commentary["very_fast_ball"])
+        if swing > 5: 
+            comments.extend(commentary["swinging_ball"])
+        if slower:
+            comments.extend(commentary["slower_ball"])
+        if seam > 5: 
+            comments.extend(commentary["seaming_ball"])
+        if bounce > 5: 
+            comments.extend(commentary["high_bouncer"])
+        if turn > 2: 
+            comments.extend(commentary["spinning_ball"])
+        if difficulty < -10: 
+            if bowler.bowling_type == "Pacer":
+                comments.extend(commentary["bad_ball_pacer"])
+            else:
+                comments.extend(commentary["bad_ball_spinner"])
+
+        if len(comments) == 0: 
+            comments.extend(generic_commentary["W"])
+
+        return 0, True, comments, pace
+
+    runs = ((base_runs)+0.2)**1.1 * (1.5 + (settled_meter ** 0.2)/20 - difficulty/5)*fatigue_effect * ((aggression)) 
+    w = get_ball_probabilities(runs)
+    r =  random.choices([0,1,2,3,4,5,6], weights=w)[0]
+
+    if r == 0: 
+        if random.randint(1,100) > (striker.batting_rotation - 50):
+            r = 1
+    if r == 1: 
+        if random.randint(1,100) < (striker.batting_rotation - 50):
+            r = 0
+
+    if r == 0: 
+        if pace > 150: 
+            comments.extend(dot_ball_commentary["very_fast_ball"])
+        if swing > 8: 
+            comments.extend(dot_ball_commentary["swinging_ball"])
+        if slower:
+            comments.extend(dot_ball_commentary["slower_ball"])
+        if seam > 5: 
+            comments.extend(dot_ball_commentary["seaming_ball"])
+        if bounce > 5: 
+            comments.extend(dot_ball_commentary["high_bouncer"])
+        if turn > 5: 
+            comments.extend(dot_ball_commentary["spinning_ball"])
+        if difficulty < -10:
+            if bowler.bowling_type == "Pacer":
+                comments.extend(dot_ball_commentary["bad_ball_pacer"])
+            else:
+                comments.extend(dot_ball_commentary["bad_ball_spinner"])
+
+    
+    if r == 1: 
+        if pace > 147: 
+            comments.extend(single_commentary["very_fast_ball"])
+        if swing > 22: 
+            comments.extend(single_commentary["swinging_ball"])
+        if slower:
+            comments.extend(single_commentary["slower_ball"])
+        if seam > 12: 
+            comments.extend(single_commentary["seaming_ball"])
+        if bounce > 7: 
+            comments.extend(single_commentary["high_bouncer"])
+        if turn > 10: 
+            comments.extend(single_commentary["spinning_ball"])
+        if difficulty < -10:
+            if bowler.bowling_type == "Pacer":
+                comments.extend(single_commentary["bad_ball_pacer"])
+            else:
+                comments.extend(single_commentary["bad_ball_spinner"])
+
+    if r == 2: 
+        if pace > 147: 
+            comments.extend(two_commentary["very_fast_ball"])
+        if swing > 22: 
+            comments.extend(two_commentary["swinging_ball"])
+        if slower:
+            comments.extend(two_commentary["slower_ball"])
+        if seam > 12: 
+            comments.extend(two_commentary["seaming_ball"])
+        if bounce > 7: 
+            comments.extend(two_commentary["high_bouncer"])
+        if turn > 10: 
+            comments.extend(two_commentary["spinning_ball"])
+        if difficulty < -10:
+            if bowler.bowling_type == "Pacer":
+                comments.extend(two_commentary["bad_ball_pacer"])
+            else:
+                comments.extend(two_commentary["bad_ball_spinner"])
+
+    if r == 3:
+        if pace > 147: 
+            comments.extend(three_commentary["very_fast_ball"])
+        if swing > 22: 
+            comments.extend(three_commentary["swinging_ball"])
+        if slower:
+            comments.extend(three_commentary["slower_ball"])
+        if seam > 12: 
+            comments.extend(three_commentary["seaming_ball"])
+        if bounce > 7: 
+            comments.extend(three_commentary["high_bouncer"])
+        if turn > 10: 
+            comments.extend(three_commentary["spinning_ball"])
+        if difficulty < -10:
+            if bowler.bowling_type == "Pacer":
+                comments.extend(three_commentary["bad_ball_pacer"])
+            else:
+                comments.extend(three_commentary["bad_ball_spinner"])
+
+    if r == 4: 
+        if pace > 147: 
+            comments.extend(four_commentary["very_fast_ball"])
+        if swing > 22: 
+            comments.extend(four_commentary["swinging_ball"])
+        if slower:
+            comments.extend(four_commentary["slower_ball"])
+        if seam > 12: 
+            comments.extend(four_commentary["seaming_ball"])
+        if bounce > 7: 
+            comments.extend(four_commentary["high_bouncer"])
+        if turn > 10: 
+            comments.extend(four_commentary["spinning_ball"])
+        if difficulty < -10:
+            if bowler.bowling_type == "Pacer":
+                comments.extend(four_commentary["bad_ball_pacer"])
+            else:
+                comments.extend(four_commentary["bad_ball_spinner"])
+
+    if r == 6:
+        if pace > 147: 
+            comments.extend(six_commentary["very_fast_ball"])
+        if swing > 22: 
+            comments.extend(six_commentary["swinging_ball"])
+        if slower:
+            comments.extend(six_commentary["slower_ball"])
+        if seam > 12: 
+            comments.extend(six_commentary["seaming_ball"])
+        if bounce > 7: 
+            comments.extend(six_commentary["high_bouncer"])
+        if turn > 10: 
+            comments.extend(six_commentary["spinning_ball"])
+        if difficulty < -10:
             if bowler.bowling_type == "Pacer":
                 comments.extend(six_commentary["bad_ball_pacer"])
             else:
@@ -1347,6 +1278,41 @@ def simulate_odi(team1, team2, venue):
         print("\nMatch tied!")
     
     return (team1_score, team1_wickets, team2_score, team2_wickets)
+
+
+
+def simulate_hundred(team1, team2, venue):
+    """Simulate a match between any two teams."""
+    # Random toss to decide who bats first
+    if random.randint(1, 100) > 100:
+        team1, team2 = team2, team1
+    
+    pitch = venue
+    
+    # Simulate first innings
+    team1_score, team1_wickets, team1_batting_stats, team1_bowling_stats = simulate_100_innings(team1, team2, pitch)
+    
+    # Display scorecard for team 1
+    display_scorecard(team1_batting_stats, team1_bowling_stats, team1.name, team1_score, team1_wickets, [])
+    
+    # Simulate second innings
+    team2_score, team2_wickets, team2_batting_stats, team2_bowling_stats = simulate_100_innings(team2, team1, pitch, team1_score)
+
+    
+    # Display scorecard for team 2
+    display_scorecard(team2_batting_stats, team2_bowling_stats, team2.name, team2_score, team2_wickets, [])
+
+    # Determine winner
+    if team1_score > team2_score:
+        print(f"\n{team1.name} wins by {team1_score - team2_score} runs!")
+    elif team2_score > team1_score:
+        print(f"\n{team2.name} wins by {10 - team2_wickets} wickets!")
+    else:
+        print("\nMatch tied!")
+    
+    return (team1_score, team1_wickets, team2_score, team2_wickets)
+
+
 
 
 def simulate_t20(team1, team2, venue):
@@ -1423,11 +1389,11 @@ def select_bowler_test(bowling_team, bowled_overs, over_number, previous_bowler,
         # Middle overs (10-39)
         # Balance between spin/pace, wickets, and economy
         situation_weights = {
-            "pace": 1.0,
-            "swing": 0.8,
+            "pace": 1.2,
+            "swing": 0.5,
             "control": 1.2,
-            "wickets": 0.5,
-            "economy": 1,
+            "wickets": 0.6,
+            "economy": 0.8,
             "spin": 1.3       # Control runs in middle phase
         }
 
@@ -1452,12 +1418,13 @@ def select_bowler_test(bowling_team, bowled_overs, over_number, previous_bowler,
         # Normalize performance: reward wickets, penalize high economy
         wicket_score = min(wickets / 5, 1.0)  # Cap at 5 wickets for max score
         economy_score = max(0, 1 - (economy - 6) / 6)  # Ideal economy ~6, penalize above
+        b = 0
+        if bowler.role == "Batsman":
+            b = -3
+        if bowler.role == "All-Rounder" and bowler.bowling_type != "Pace":
+            b = -3
         
-        bs = 2
-        if bowler.role == "Bowler": 
-            bs = 4
-        if bowler.role == "Batsman": 
-            bs = 0
+        
         # Combine scores with situational weights
         total_score = (
             situation_weights["pace"] * pace_score +
@@ -1465,8 +1432,8 @@ def select_bowler_test(bowling_team, bowled_overs, over_number, previous_bowler,
             situation_weights["control"] * control_score +
             situation_weights["wickets"] * wicket_score +
             situation_weights["economy"] * economy_score +
-            situation_weights["spin"] * spin_score + bs
-            - (bowler.match_fatigue)**0.3
+            situation_weights["spin"] * spin_score 
+            - (bowler.match_fatigue)**0.3 + b
 
         )
         
@@ -1495,7 +1462,7 @@ def select_bowler_test(bowling_team, bowled_overs, over_number, previous_bowler,
 
     # Debug output (optional)
     # print(f"Over {over_number + 1}: Selected {selected_bowler.name} (Score: {dict(bowler_scores)[selected_bowler]:.2f})")
-    selected_bowler.match_fatigue += 500/selected_bowler.fitness
+    selected_bowler.match_fatigue += 1000/selected_bowler.fitness
     return selected_bowler
 
 
@@ -1597,8 +1564,7 @@ def select_bowler_odi(bowling_team, bowled_overs, over_number, previous_bowler, 
         total_score = total_score - (bowler.match_fatigue*total_score/200)
         
         bowler_scores.append((bowler, total_score))
-        if bowler.match_fatigue > 20:
-            bowler.match_fatigue -= 2
+        bowler.match_fatigue -= (bowler.match_fatigue - 20)/ bowler.fitness
 
     # Step 4: Select top candidates and add randomness for variety
     if not bowler_scores:
@@ -1618,7 +1584,7 @@ def select_bowler_odi(bowling_team, bowled_overs, over_number, previous_bowler, 
 
     # Debug output (optional)
     # print(f"Over {over_number + 1}: Selected {selected_bowler.name} (Score: {dict(bowler_scores)[selected_bowler]:.2f})")
-    selected_bowler.match_fatigue += 100/selected_bowler.fitness
+    selected_bowler.match_fatigue += 500/selected_bowler.fitness
     return selected_bowler
 
 
@@ -1644,7 +1610,7 @@ def select_bowler_t20(bowling_team, bowled_overs, over_number, previous_bowler, 
         overs_bowled = bowled_overs.get(name, 0)
         
         # Exclude if bowled 10 overs or was the previous bowler
-        if (previous_bowler is None or name != previous_bowler.name) and (overs_bowled < 4):
+        if (previous_bowler is None or (name != previous_bowler.name and random.randint(1,10) > 3)) and (overs_bowled < 4):
             available_bowlers.append(player)
     
     if not available_bowlers:
@@ -1659,7 +1625,7 @@ def select_bowler_t20(bowling_team, bowled_overs, over_number, previous_bowler, 
             "control": 1.3,      # Accuracy for tight lines
             "wickets": 1.2,      # Prioritize wicket-taking
             "economy": 0.6,  
-            "spin": -0.5     # Less focus on economy early
+            "spin": -0.8     # Less focus on economy early
         }
     elif over_number < 15:  
         # Middle overs (10-39)
@@ -1670,7 +1636,7 @@ def select_bowler_t20(bowling_team, bowled_overs, over_number, previous_bowler, 
             "control": 1.2,
             "wickets": 0.5,
             "economy": 1,
-            "spin": 1.5        # Control runs in middle phase
+            "spin": 5   # Control runs in middle phase
         }
 
     else:  
@@ -1682,7 +1648,7 @@ def select_bowler_t20(bowling_team, bowled_overs, over_number, previous_bowler, 
             "control": 1.5,
             "wickets": 0.5,
             "economy": 1.3,
-            "spin": 0.6        # Control runs in middle phase
+            "spin": -3      # Control runs in middle phase
         }
     bowler_scores = []
     for bowler in available_bowlers:
@@ -1694,8 +1660,6 @@ def select_bowler_t20(bowling_team, bowled_overs, over_number, previous_bowler, 
         swing = bowler.bowling_swing / 100 if hasattr(bowler, 'bowling_swing') else bowler.bowling_turn / 100  # Use turn for spinners
         control_score = bowler.bowling_control / 100
         spin_score = bowler.bowling_turn / 100 
-        if bowler.bowling_type =="Finger":
-            spin_score = spin_score + 0.3
         
         # Performance scores from current match
         overs_bowled = stats["overs"]
@@ -1716,13 +1680,22 @@ def select_bowler_t20(bowling_team, bowled_overs, over_number, previous_bowler, 
             situation_weights["economy"] * economy_score +
             situation_weights["spin"] * spin_score
         )
+
+
+        if bowler.role == "Batsman": 
+            total_score /= 5
+        if bowler.role == "Keeper": 
+            total_score /= 8
+        if bowler.role == "Bowler":
+            total_score *= 1.6
+        if bowler.role == "All-Rounder" and bowler.bowling_type == "Spinner" and over > 13: 
+            total.score *= 1.3
         
         # Adjust for freshness: slightly favor bowlers who’ve bowled less
-        total_score = total_score - (bowler.match_fatigue*total_score/200)
         
         bowler_scores.append((bowler, total_score))
-        if bowler.match_fatigue > 20:
-            bowler.match_fatigue -= 2
+
+        bowler.match_fatigue -= 100
 
     # Step 4: Select top candidates and add randomness for variety
     if not bowler_scores:
@@ -1742,8 +1715,85 @@ def select_bowler_t20(bowling_team, bowled_overs, over_number, previous_bowler, 
 
     # Debug output (optional)
     # print(f"Over {over_number + 1}: Selected {selected_bowler.name} (Score: {dict(bowler_scores)[selected_bowler]:.2f})")
-    selected_bowler.match_fatigue += 100/selected_bowler.fitness
+    selected_bowler.match_fatigue += 1000/selected_bowler.fitness
     return selected_bowler
+
+
+
+def simulate_100_innings(batting_team: Team, bowling_team: Team, venue, target=None):
+    score = 0
+    wickets = 0
+    bowled_overs = {}
+    batsman_index = 2
+    gamewon = False
+    bowler = None
+    
+    batting_stats = {player.name: {"runs": 0, "balls": 0, "out": False} for player in batting_team.players}
+    bowling_stats = {player.name: {"overs": 0, "manameens": 0, "runs": 0, "wickets": 0} for player in bowling_team.players}
+    settled_meters = {player.name: 0 for player in batting_team.players}
+
+    striker = batting_team.players[0]
+    non_striker = batting_team.players[1]
+    
+    for over in range(20):
+        if wickets >= 10 or gamewon:
+            break
+
+
+        bowler = select_bowler_t20(bowling_team, bowled_overs, over, bowler, bowling_stats)
+        #print(f"\nOver {over + 1}: {bowler.name} bowling")
+        message = ""
+        over_runs, over_wickets = 0, 0
+        
+        for ball in range(5):
+            if wickets >= 10 or gamewon:
+                break
+
+            batting_stats[striker.name]["balls"] += 1
+            aggression = calculate_aggression_t20(over, venue, target, striker, non_striker, settled_meters[striker.name], settled_meters[non_striker.name], 10-wickets, score)
+            run, out, comments, pace = simulate_ball_t20(striker, bowler, venue, settled_meters[striker.name], over, aggression)
+            #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
+            striker.match_fatigue += 50/striker.fitness
+            if run < 4: 
+                striker.match_fatigue += run * 60/striker.fitness
+                non_striker.match_fatigue += run * 60/non_striker.fitness
+            else: 
+                striker.match_fatigue += 80/striker.fitness
+                non_striker.match_fatigue += 50/non_striker.fitness
+            
+            
+            if out:
+                wickets += 1
+                batting_stats[striker.name]["out"] = True
+                bowling_stats[bowler.name]["wickets"] += 1
+                if batsman_index < len(batting_team.players):
+                    striker = batting_team.players[batsman_index]
+                    settled_meters[striker.name] = 0
+                    batsman_index += 1
+            else:
+                score += run
+                batting_stats[striker.name]["runs"] += run
+                if target and score > target:
+                    gamewon = True
+                if settled_meters[striker.name] < 50:
+                    settled_meters[striker.name] += run*0.4 + 0.2
+                if run % 2 == 1:
+                    striker, non_striker = non_striker, striker
+            
+            over_runs += run
+            if out: 
+                message += f"{over}.{ball+1} {bowler.name} to {striker.name}: OUT! Score {score}/{wickets}\n"
+            else:
+                message += f"{over}.{ball+1} {bowler.name} to {striker.name}: {run} Runs. Score {score}/{wickets}\n"
+        
+        striker, non_striker = non_striker, striker
+        bowling_stats[bowler.name]["overs"] += 1
+        bowling_stats[bowler.name]["runs"] += over_runs
+
+        message += f"End of Over {over + 1} | Score {score}/{wickets} | {striker.name}:{batting_stats[striker.name]["runs"]}* of {batting_stats[striker.name]["balls"]} | {non_striker.name}:{batting_stats[non_striker.name]["runs"]} of {batting_stats[non_striker.name]["balls"]} | {bowler.name} :  {bowling_stats[bowler.name]["overs"]}-{bowling_stats[bowler.name]["runs"]}-{bowling_stats[bowler.name]["wickets"]}"
+        bowled_overs[bowler.name] = bowled_overs.get(bowler.name, 0) + 1
+    
+    return score, wickets, batting_stats, bowling_stats
 
 
 
@@ -1783,10 +1833,10 @@ def simulate_t20_innings(batting_team: Team, bowling_team: Team, venue, target=N
             #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
             striker.match_fatigue += 50/striker.fitness
             if run < 4: 
-                striker.match_fatigue += run * 70/striker.fitness
-                non_striker.match_fatigue += run * 70/non_striker.fitness
+                striker.match_fatigue += run * 60/striker.fitness
+                non_striker.match_fatigue += run * 60/non_striker.fitness
             else: 
-                striker.match_fatigue += 100/striker.fitness
+                striker.match_fatigue += 80/striker.fitness
                 non_striker.match_fatigue += 50/non_striker.fitness
             
             
@@ -1804,7 +1854,7 @@ def simulate_t20_innings(batting_team: Team, bowling_team: Team, venue, target=N
                 if target and score > target:
                     gamewon = True
                 if settled_meters[striker.name] < 50:
-                    settled_meters[striker.name] += 0.4 + run*1.2
+                    settled_meters[striker.name] += run*0.4 + 0.2
                 if run % 2 == 1:
                     striker, non_striker = non_striker, striker
             
@@ -1818,7 +1868,7 @@ def simulate_t20_innings(batting_team: Team, bowling_team: Team, venue, target=N
         bowling_stats[bowler.name]["overs"] += 1
         bowling_stats[bowler.name]["runs"] += over_runs
 
-        message += f"End of Over {over} | Score {score}/{wickets} | {striker.name}:{batting_stats[striker.name]["runs"]}* of {batting_stats[striker.name]["balls"]} | {non_striker.name}:{batting_stats[non_striker.name]["runs"]} of {batting_stats[non_striker.name]["balls"]} | {bowler.name} :  {bowling_stats[bowler.name]["overs"]}-{bowling_stats[bowler.name]["runs"]}-{bowling_stats[bowler.name]["wickets"]}"
+        message += f"End of Over {over + 1} | Score {score}/{wickets} | {striker.name}:{batting_stats[striker.name]["runs"]}* of {batting_stats[striker.name]["balls"]} | {non_striker.name}:{batting_stats[non_striker.name]["runs"]} of {batting_stats[non_striker.name]["balls"]} | {bowler.name} :  {bowling_stats[bowler.name]["overs"]}-{bowling_stats[bowler.name]["runs"]}-{bowling_stats[bowler.name]["wickets"]}"
         bowled_overs[bowler.name] = bowled_overs.get(bowler.name, 0) + 1
     
     return score, wickets, batting_stats, bowling_stats
@@ -1894,51 +1944,166 @@ def simulate_odi_innings(batting_team: Team, bowling_team: Team, venue, target=N
         bowled_overs[bowler.name] = bowled_overs.get(bowler.name, 0) + 1
     
     return score, wickets, batting_stats, bowling_stats
-        
+ 
+import random
 
+# ... (Keep all other imports and helper functions as they are)
 
-def simulate_test_innings(batting_team: Team, bowling_team: Team, venue, target=None):
+def simulate_test(team1, team2, venue):
+    """Simulate a Test match between two teams, limited to 450 overs, with follow-ons."""
+    total_overs_limit = 450  # 5 days × 90 overs/day
+    overs_bowled = 0  # Track total overs bowled across all innings
+
+    # Random toss to decide who bats first
+    if random.randint(1, 100) > 50:  # Adjusted to 50% chance for simplicity
+        team1, team2 = team2, team1
+
+    pitch = venue
+
+    # Reset fatigue for all players at the start of the match
+    for player in team1.players + team2.players:
+        player.match_fatigue = 0
+
+    # Simulate first innings of team1
+    team1_score1, team1_wickets1, team1_batting_stats1, team1_bowling_stats1, overs_team1_innings1 = simulate_test_innings(team1, team2, pitch, total_overs_limit - overs_bowled)
+    overs_bowled += overs_team1_innings1
+    display_scorecard(team1_batting_stats1, team1_bowling_stats1, team1.name, team1_score1, team1_wickets1, "1st Innings")
+
+    # Recover fatigue for team1 (batting) and retain fatigue for team2 (bowling)
+    for player in team1.players:
+        player.match_fatigue = max(0, player.match_fatigue - 50)  # Partial recovery after batting
+    for player in team2.players:
+        player.match_fatigue += 10  # Slight increase to reflect ongoing effort
+
+    # Simulate first innings of team2
+    team2_score1, team2_wickets1, team2_batting_stats1, team2_bowling_stats1, overs_team2_innings1 = simulate_test_innings(team2, team1, pitch, total_overs_limit - overs_bowled)
+    overs_bowled += overs_team2_innings1
+    display_scorecard(team2_batting_stats1, team2_bowling_stats1, team2.name, team2_score1, team2_wickets1, "1st Innings")
+
+    # Recover fatigue for team2 (batting) and retain fatigue for team1 (bowling)
+    for player in team2.players:
+        player.match_fatigue = max(0, player.match_fatigue - 50)
+    for player in team1.players:
+        player.match_fatigue += 10
+
+    # Follow-on logic
+    if team1_score1 - team2_score1 >= 200 and overs_bowled < total_overs_limit:
+        print(f"{team1.name} enforces the follow-on on {team2.name}!")
+        # Team2 bats their second innings (follow-on)
+        team2_score2, team2_wickets2, team2_batting_stats2, team2_bowling_stats2, overs_team2_innings2 = simulate_test_innings(team2, team1, pitch, total_overs_limit - overs_bowled)
+        overs_bowled += overs_team2_innings2
+        display_scorecard_discord(team2.name, team2_batting_stats2, team2_bowling_stats2)
+
+        # Recover fatigue for team2 (batting) and retain for team1 (bowling)
+        for player in team2.players:
+            player.match_fatigue = max(0, player.match_fatigue - 50)
+        for player in team1.players:
+            player.match_fatigue += 10
+
+        # Team1 bats in their second innings, chasing a target
+        target = team2_score1 + team2_score2 - team1_score1 + 1
+        if overs_bowled < total_overs_limit and target > 0:
+            print(f"{team1.name} needs {target} runs to win in the final innings!")
+            team1_score2, team1_wickets2, team1_batting_stats2, team1_bowling_stats2, overs_team1_innings2 = simulate_test_innings(team1, team2, pitch, total_overs_limit - overs_bowled, target=target)
+            overs_bowled += overs_team1_innings2
+            display_scorecard_discord(team1.name, team1_batting_stats2, team1_bowling_stats2)
+
+            # Decide result based on the final innings
+            if team1_score2 >= target:
+                wickets_remaining = 10 - team1_wickets2
+                print(f"{team1.name} wins by {wickets_remaining} wickets!")
+                return {team1.name}
+            else:
+                runs_short = target - team1_score2
+                print(f"{team2.name} wins by {runs_short} runs!")
+                return {team2.name}
+        else:
+            print("Match drawn due to insufficient overs or no target!")
+            return None
+    else:
+        # No follow-on: team1 bats their second innings
+        if overs_bowled < total_overs_limit:
+            team1_score2, team1_wickets2, team1_batting_stats2, team1_bowling_stats2, overs_team1_innings2 = simulate_test_innings(team1, team2, pitch, total_overs_limit - overs_bowled)
+            overs_bowled += overs_team1_innings2
+            display_scorecard_discord(team1.name, team1_batting_stats2, team1_bowling_stats2)
+
+            # Recover fatigue for team1 (batting) and retain for team2 (bowling)
+            for player in team1.players:
+                player.match_fatigue = max(0, player.match_fatigue - 50)
+            for player in team2.players:
+                player.match_fatigue += 10
+        else:
+            team1_score2, team1_wickets2 = 0, 0
+
+        # Team2 chases in their second innings
+        target = team1_score1 + team1_score2 - team2_score1 + 1
+        if overs_bowled < total_overs_limit and target > 0:
+            print(f"{team2.name} needs {target} runs to win in the final innings!")
+            team2_score2, team2_wickets2, team2_batting_stats2, team2_bowling_stats2, overs_team2_innings2 = simulate_test_innings(team2, team1, pitch, total_overs_limit - overs_bowled, target=target)
+            overs_bowled += overs_team2_innings2
+            display_scorecard_discord(team2.name, team2_batting_stats2, team2_bowling_stats2)
+
+            # Decide result based on the final innings
+            if team2_score2 >= target:
+                wickets_remaining = 10 - team2_wickets2
+                print(f"{team2.name} wins by {wickets_remaining} wickets!")
+                return team2.name
+            else:
+                runs_short = target - team2_score2
+                print(f"{team1.name} wins by {runs_short} runs!")
+                return team1.name
+        elif target <= 0:
+            print(f"{team2.name} wins by an innings and {-target} runs")
+            return team2.name
+        else:
+            print("Match drawn due to insufficient overs!")
+            return None
+
+    # If overs run out before a result
+    print(f"Match drawn - total overs limit ({total_overs_limit}) reached!")
+    return None
+
+def simulate_test_innings(batting_team: Team, bowling_team: Team, venue, overs_remaining, target=None):
+    """Simulate a Test innings with a maximum overs limit and fatigue mechanics."""
     score = 0
     wickets = 0
     bowled_overs = {}
     batsman_index = 2
     gamewon = False
     bowler = None
+    total_balls = 0
 
-    for bowler in bowling_team.players:
-        bowler.match_fatigue = 10
-    
     batting_stats = {player.name: {"runs": 0, "balls": 0, "out": False} for player in batting_team.players}
-    bowling_stats = {player.name: {"overs": 0, "manameens": 0, "runs": 0, "wickets": 0} for player in bowling_team.players}
+    bowling_stats = {player.name: {"overs": 0, "maidens": 0, "runs": 0, "wickets": 0} for player in bowling_team.players}
     settled_meters = {player.name: 0 for player in batting_team.players}
 
     striker = batting_team.players[0]
     non_striker = batting_team.players[1]
     
-    for over in range(200):
-        if wickets >= 10 or gamewon:
+    max_overs = min(overs_remaining, 450)  # Cap at remaining overs or 450 if no prior innings
+    for over in range(max_overs):
+        if wickets >= 10 or (target and score >= target):
             break
 
-
         bowler = select_bowler_test(bowling_team, bowled_overs, over, bowler, bowling_stats)
-        #print(f"\nOver {over + 1}: {bowler.name} bowling")
-        message = ""
         over_runs, over_wickets = 0, 0
         
         for ball in range(6):
-            if wickets >= 10 or gamewon:
+            if wickets >= 10 or (target and score >= target):
                 break
 
             batting_stats[striker.name]["balls"] += 1
-            aggression = 1
+            total_balls += 1
+            aggression = 1  # Test aggression typically steady, can be refined
             run, out, comments, pace = simulate_ball_test(striker, bowler, venue, settled_meters[striker.name], over, aggression)
-            #print(f"{over}.{ball+1} {bowler.name} to {striker.name} | {run} Runs. | {pace} {random.choice(comments)} |{score}/{wickets}")
-            striker.match_fatigue += 10/bowler.fitness
-            if run < 4: 
-                striker.match_fatigue += run * 20/bowler.fitness
-                non_striker.match_fatigue += run * 20/bowler.fitness
-            
-            
+
+            # Fatigue adjustments per ball
+            striker.match_fatigue += 10 / striker.fitness  # Batting fatigue accumulates slowly
+            if run < 4:
+                striker.match_fatigue += run * 20 / striker.fitness
+                non_striker.match_fatigue += run * 20 / non_striker.fitness
+            bowler.match_fatigue += 30 / bowler.fitness  # Bowling fatigue accumulates faster per ball
+
             if out:
                 wickets += 1
                 batting_stats[striker.name]["out"] = True
@@ -1950,28 +2115,24 @@ def simulate_test_innings(batting_team: Team, bowling_team: Team, venue, target=
             else:
                 score += run
                 batting_stats[striker.name]["runs"] += run
-                if target and score > target:
+                if target and score >= target:
                     gamewon = True
-                if settled_meters[striker.name] < 50:
-                    settled_meters[striker.name] += run * 0.3 + 0.35
+                if settled_meters[striker.name] < 70:
+                    settled_meters[striker.name] += run * 0.5 + 0.35
                 if run % 2 == 1:
                     striker, non_striker = non_striker, striker
             
             over_runs += run
-            if out: 
-                message += f"{over}.{ball+1} {bowler.name} to {striker.name}: OUT! Score {score}/{wickets}\n"
-            else:
-                message += f"{over}.{ball+1} {bowler.name} to {striker.name}: {run} Runs. Score {score}/{wickets}\n"
         
         striker, non_striker = non_striker, striker
         bowling_stats[bowler.name]["overs"] += 1
         bowling_stats[bowler.name]["runs"] += over_runs
-
-        message += f"End of Over {over} | Score {score}/{wickets} | {striker.name}:{batting_stats[striker.name]["runs"]}* of {batting_stats[striker.name]["balls"]} | {non_striker.name}:{batting_stats[non_striker.name]["runs"]} of {batting_stats[non_striker.name]["balls"]} | {bowler.name} :  {bowling_stats[bowler.name]["overs"]}-{bowling_stats[bowler.name]["runs"]}-{bowling_stats[bowler.name]["wickets"]}"
         bowled_overs[bowler.name] = bowled_overs.get(bowler.name, 0) + 1
     
-    return score, wickets, batting_stats, bowling_stats
+    overs_used = total_balls // 6 + (1 if total_balls % 6 > 0 else 0)
+    return score, wickets, batting_stats, bowling_stats, overs_used
 
+# ... (Keep all other functions unchanged unless they need similar fatigue mechanics)
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -1991,14 +2152,14 @@ from plotly.subplots import make_subplots
 def run_simulation_analysis(num_simulations=20, match_format="t20"):
     # Load data
     players = read_cricketers("data/players.csv")
-    teams = read_teams("data/teams.csv", players)
+    teams = read_teams("data/hundredteams.csv", players)
     grounds = read_grounds("data/venues.csv")
     
     print(f"Running {num_simulations} {match_format.upper()} match simulations")
     
     # Initialize data collection
     match_results = []
-    batting_stats = {"total_runs": [], "innings_scores": [], "wickets_lost": [], "batter_scores": []}
+    batting_stats = {"total_runs": [], "innings_scores": [], "wickets_lost": [], "batter_scores": [], "overs_played": []}
     player_performances = {"batting": {}, "bowling": {}}
     
     player_data = {"batting": [], "bowling": []}
@@ -2020,8 +2181,8 @@ def run_simulation_analysis(num_simulations=20, match_format="t20"):
             t1_s, t1_w, t1_bat, t1_bowl = simulate_odi_innings(team1, team2, venue)
             t2_s, t2_w, t2_bat, t2_bowl = simulate_odi_innings(team2, team1, venue, t1_s)
         else:  # test
-            t1_s, t1_w, t1_bat, t1_bowl = simulate_test_innings(team1, team2, venue)
-            t2_s, t2_w, t2_bat, t2_bowl = simulate_test_innings(team2, team1, venue, t1_s)
+            t1_s, t1_w, t1_bat, t1_bowl, o1 = simulate_test_innings(team1, team2, venue, 200)
+            t2_s, t2_w, t2_bat, t2_bowl, o2 = simulate_test_innings(team2, team1, venue, 200, t1_s)
         
         match_results.append({
             "team1_name": team1.name, "team1_score": t1_s, "team1_wickets": t1_w,
@@ -2079,6 +2240,7 @@ def run_simulation_analysis(num_simulations=20, match_format="t20"):
                         "bowling_bounce": player_obj.bowling_bounce,
                         "bowling_turn": player_obj.bowling_turn,
                         "bowling_control": player_obj.bowling_control,
+                        "bowling_seam": player_obj.bowling_seam,
                         "fitness": player_obj.fitness
                     })
         
@@ -2098,7 +2260,7 @@ def run_simulation_analysis(num_simulations=20, match_format="t20"):
     
     # Regression analysis
     batting_attrs = ["batting_fast", "batting_swing", "batting_bounce", "batting_spin", "batting_rotation", "fitness", "format_avg", "format_sr"]
-    bowling_attrs = ["bowling_pace", "bowling_swing", "bowling_bounce", "bowling_turn", "bowling_control", "fitness"]
+    bowling_attrs = ["bowling_pace", "bowling_swing", "bowling_bounce", "bowling_seam", "bowling_turn", "bowling_control", "fitness"]
     
     # Batting regression (predict runs)
     X_batting = batting_df[batting_attrs]
@@ -2386,7 +2548,7 @@ def collect_ball_data(match_format="t20", num_balls=100000000):
         num_balls: Number of ball simulations to run
     """
     players = read_cricketers("data/players.csv")
-    teams = read_teams("data/teams.csv", players)
+    teams = read_teams("data/hundredteams.csv", players)
     grounds = read_grounds("data/venues.csv")
     
 
@@ -2563,7 +2725,252 @@ def play_ashes(n):
     print (wins/(n*5))
 # Run the bot
 
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-# For analyzing multiple match simulations
-# run_simulation_analysis(num_simulations=100, match_format="test")
-run_simulation_analysis(num_simulations=1000, match_format="test")
+def run_simulation_analysis_player(num_simulations=20, match_format="t20"):
+    """
+    Run multiple match simulations, analyze player performances, and create Plotly graphs.
+    
+    Args:
+        num_simulations: Number of simulations to run
+        match_format: Match format ("t20", "odi", or "test")
+    """
+    # Load data
+    players = read_cricketers("data/players.csv")
+    teams = read_teams("data/hundredteams.csv", players)
+    grounds = read_grounds("data/venues.csv")
+    
+    print(f"Running {num_simulations} {match_format.upper()} match simulations")
+    
+    # Initialize data collection
+    match_results = []
+    batting_stats = {
+        "total_runs": [],
+        "innings_scores": [],
+        "wickets_lost": [],
+        "boundaries": {"fours": 0, "sixes": 0},
+        "dots": 0,
+        "total_balls": 0,
+        "batter_scores": []
+    }
+    bowling_stats = {
+        "economy_rates": [],
+        "wicket_takers": {}
+    }
+    
+    # Track individual player performances across simulations
+    player_performances = {
+        "batting": {},  # {player_name: {"team": str, "runs": int, "balls": int, "innings": int, "outs": int}}
+        "bowling": {}   # {player_name: {"team": str, "overs": float, "runs": int, "wickets": int}}
+    }
+    
+    # Run simulations
+    for i in range(num_simulations):
+        # Select two random teams and a random venue
+        team1, team2 = random.sample(teams, 2)
+        venue = random.choice(grounds)
+        
+        print(f"Simulation {i+1}/{num_simulations}: {team1.name} vs {team2.name} at {venue.name}")
+        
+        # Reset match fitness
+        for player in team1.players + team2.players:
+            player.set_match_fitness()
+            
+        # Run simulation based on format
+        if match_format.lower() == "t20":
+            team1_score, team1_wickets, team1_batting, team1_bowling = simulate_t20_innings(team1, team2, venue)
+            team2_score, team2_wickets, team2_batting, team2_bowling = simulate_t20_innings(team2, team1, venue, team1_score)
+        elif match_format.lower() == "odi":
+            team1_score, team1_wickets, team1_batting, team1_bowling = simulate_odi_innings(team1, team2, venue)
+            team2_score, team2_wickets, team2_batting, team2_bowling = simulate_odi_innings(team2, team1, venue, team1_score)
+        elif match_format.lower() == "test":
+            team1_score, team1_wickets, team1_batting, team1_bowling, o1 = simulate_test_innings(team1, team2, venue, 200)
+            team2_score, team2_wickets, team2_batting, team2_bowling, o2 = simulate_test_innings(team2, team1, venue, 200, team1_score)
+        elif match_format == "100": 
+            team1_score, team1_wickets, team1_batting, team1_bowling = simulate_100_innings(team1, team2, venue)
+            team2_score, team2_wickets, team2_batting, team2_bowling = simulate_100_innings(team2, team1, venue, team1_score)
+     
+        # Record match result
+        match_results.append({
+            "team1_name": team1.name,
+            "team1_score": team1_score,
+            "team1_wickets": team1_wickets,
+            "team2_name": team2.name,
+            "team2_score": team2_score,
+            "team2_wickets": team2_wickets,
+            "winner": team1.name if team1_score > team2_score else team2.name,
+            "margin": f"{team1_score - team2_score} runs" if team1_score > team2_score else f"{10 - team2_wickets} wickets"
+        })
+        
+        # Aggregate batting stats
+        batting_stats["total_runs"].append(team1_score + team2_score)
+        batting_stats["innings_scores"].extend([team1_score, team2_score])
+        batting_stats["wickets_lost"].extend([team1_wickets, team2_wickets])
+        
+        for stats in [team1_batting, team2_batting]:
+            for player, stat in stats.items():
+                if stat['balls'] > 0:
+                    batting_stats["batter_scores"].append(stat['runs'])
+        
+        # Collect player performances
+        def update_batting_performance(stats, team_name):
+            for player_name, stat in stats.items():
+                if player_name not in player_performances["batting"]:
+                    player_performances["batting"][player_name] = {
+                        "team": team_name,
+                        "runs": 0,
+                        "balls": 0,
+                        "innings": 0,
+                        "outs": 0
+                    }
+                p = player_performances["batting"][player_name]
+                if stat["balls"] > 0:  # Only count innings where player faced balls
+                    p["runs"] += stat["runs"]
+                    p["balls"] += stat["balls"]
+                    p["innings"] += 1
+                    p["outs"] += 1 if stat["out"] else 0
+        
+        def update_bowling_performance(stats, team_name):
+            for player_name, stat in stats.items():
+                if player_name not in player_performances["bowling"]:
+                    player_performances["bowling"][player_name] = {
+                        "team": team_name,
+                        "overs": 0,
+                        "runs": 0,
+                        "wickets": 0
+                    }
+                p = player_performances["bowling"][player_name]
+                if stat["overs"] > 0:  # Only count if bowled
+                    p["overs"] += stat["overs"]
+                    p["runs"] += stat["runs"]
+                    p["wickets"] += stat["wickets"]
+        
+        update_batting_performance(team1_batting, team1.name)
+        update_batting_performance(team2_batting, team2.name)
+        update_bowling_performance(team1_bowling, team1.name)
+        update_bowling_performance(team2_bowling, team2.name)
+    
+    # Analyze and display simulation results
+    display_simulation_results(match_results, batting_stats, bowling_stats, player_performances, match_format)
+    
+    # Create batter score histogram
+    if batting_stats["batter_scores"]:
+        bins = [0, 20, 40, 60, 80, 100, 120, 150] if (match_format == "t20" or match_format == "100") else \
+               [0, 25, 50, 75, 100, 125, 150, 200] if match_format == "odi" else \
+               [0, 50, 100, 150, 200, 250, 300, 400]
+        create_score_histogram_batter(batting_stats["batter_scores"], match_format, bins)
+        
+        avg_batter_score = sum(batting_stats["batter_scores"]) / len(batting_stats["batter_scores"])
+        print(f"\nBatter Score Statistics ({match_format.upper()}):")
+        print(f"Number of batters: {len(batting_stats['batter_scores'])}")
+        print(f"Average batter score: {avg_batter_score:.1f}")
+        print(f"Maximum batter score: {max(batting_stats['batter_scores'])}")
+        print(f"Minimum batter score: {min(batting_stats['batter_scores'])}")
+    
+    # Generate Plotly graphs
+    create_player_performance_plots(player_performances, match_format)
+
+def create_player_performance_plots(player_performances, match_format):
+    """
+    Create two Plotly scatter plots for batting and bowling performances.
+    """
+    # Prepare batting data
+    batting_data = []
+    for player_name, stats in player_performances["batting"].items():
+        if stats["innings"] > 0:  # Only include players with at least one innings
+            avg = stats["runs"] / stats["innings"] if stats["innings"] > 0 else 0
+            sr = (stats["runs"] / stats["balls"]) * 100 if stats["balls"] > 0 else 0
+            batting_data.append({
+                "name": player_name,
+                "team": stats["team"],
+                "avg": avg,
+                "sr": sr,
+                "runs": stats["runs"]
+            })
+    
+    # Prepare bowling data
+    bowling_data = []
+    for player_name, stats in player_performances["bowling"].items():
+        if stats["overs"] > 0:  # Only include players who bowled
+            economy = stats["runs"] / stats["overs"] if stats["overs"] > 0 else 0
+            strike_rate = (stats["overs"] * 6) / stats["wickets"] if stats["wickets"] > 0 else float('inf')
+            bowling_data.append({
+                "name": player_name,
+                "team": stats["team"],
+                "economy": economy,
+                "strike_rate": strike_rate,
+                "wickets": stats["wickets"]
+            })
+    
+    # Create subplots
+    fig = make_subplots(rows=1, cols=2, 
+                        subplot_titles=(f"Batting: Avg vs SR ({match_format.upper()})", 
+                                       f"Bowling: Economy vs SR ({match_format.upper()})"),
+                        horizontal_spacing=0.15)
+    
+    # Batting scatter plot
+    teams = list(set([d["team"] for d in batting_data]))
+    for team in teams:
+        team_data = [d for d in batting_data if d["team"] == team]
+        fig.add_trace(
+            go.Scatter(
+                x=[d["avg"] for d in team_data],
+                y=[d["sr"] for d in team_data],
+                text=[d["name"] for d in team_data],
+                mode="markers",
+                name=team,
+                marker=dict(
+                    size=[min(d["runs"] / 10, 50) for d in team_data],  # Cap size at 50
+                    sizemode="area",
+                    sizeref=0.1
+                ),
+                hovertemplate="%{text}<br>Avg: %{x:.1f}<br>SR: %{y:.1f}<br>Runs: %{customdata}",
+                customdata=[d["runs"] for d in team_data]
+            ),
+            row=1, col=1
+        )
+    
+    # Bowling scatter plot
+    for team in teams:
+        team_data = [d for d in bowling_data if d["team"] == team]
+        fig.add_trace(
+            go.Scatter(
+                x=[d["economy"] for d in team_data],
+                y=[d["strike_rate"] for d in team_data],
+                text=[d["name"] for d in team_data],
+                mode="markers",
+                name=team,
+                marker=dict(
+                    size=[min(d["wickets"] * 5, 50) for d in team_data],  # Cap size at 50
+                    sizemode="area",
+                    sizeref=0.1
+                ),
+                hovertemplate="%{text}<br>Econ: %{x:.1f}<br>SR: %{y:.1f}<br>Wickets: %{customdata}",
+                customdata=[d["wickets"] for d in team_data],
+                showlegend=False  # Avoid duplicating legend
+            ),
+            row=1, col=2
+        )
+    
+    # Update layout
+    fig.update_layout(
+        title_text=f"Player Performance Analysis ({match_format.upper()})",
+        height=600,
+        width=1200,
+        showlegend=True
+    )
+    fig.update_xaxes(title_text="Batting Average", row=1, col=1)
+    fig.update_yaxes(title_text="Strike Rate", row=1, col=1)
+    fig.update_xaxes(title_text="Economy Rate", row=1, col=2)
+    fig.update_yaxes(title_text="Bowling Strike Rate", row=1, col=2)
+    
+    # Show the plot
+    fig.show()
+
+
+play_match("KSA","IND","Lord's","100")
+play_match("RCB","MI","Lord's","100")
+play_match("SRH","LSG","Lord's","100")
+
+play_match("SA","AUS","Lord's","Test")
